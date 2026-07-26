@@ -1,2 +1,35 @@
-*venv/
-docs/
+# VENV
+.venv/
+venv/
+env/
+
+# PYTHON
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# BUILD
+dist/
+build/
+*.spec
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# DOWNLOADS (runtime out)
+downloads/
+*.mp4
+*.mp3
+*.m4a
+*.webm
+*.mkv
+
+# LOGS
+*.log
+
+# DOCUMENTATION
+*.md
