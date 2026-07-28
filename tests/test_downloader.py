@@ -1,6 +1,6 @@
 """Модульные тесты для класса YouTubeDownloader.
 
-Используются моки `yt-dlp` — никаких сетевых запросов не выполняется.
+Используются моки `yt-dlp` - никаких сетевых запросов не выполняется.
 """
 
 import threading
@@ -203,7 +203,7 @@ class TestDownload:
             outtmpl="/tmp/video.mp4",
         )
 
-        # С cancel_event, но без progress_callback — нет progress_hooks,
+        # С cancel_event, но без progress_callback - нет progress_hooks,
         # но есть raw 'hook' для отмены без прогресса
         opts2 = downloader._build_opts(
             format_type="mp4",

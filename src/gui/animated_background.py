@@ -70,7 +70,7 @@ class AnimatedBackground(QWidget):
             s["x"] += s["dx"]
             s["y"] += s["dy"]
 
-            # Отскок от краёв
+            # Отскок от краeв
             r = s["r"]
             if s["x"] < -r or s["x"] > 1 + r:
                 s["dx"] *= -1
@@ -80,7 +80,7 @@ class AnimatedBackground(QWidget):
         self.update()
 
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
-        """Нарисовать градиентные сферы на чёрном фоне."""
+        """Нарисовать градиентные сферы на чeрном фоне."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 

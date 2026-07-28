@@ -6,10 +6,12 @@
 from __future__ import annotations
 
 import os
+import signal
 import sys
 from pathlib import Path
 
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import QTimer
+from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication
 
 from src.gui.main_window import MainWindow
@@ -29,8 +31,10 @@ def _app_icon_path() -> str:
 
     Учитывает сборку PyInstaller (``sys._MEIPASS``).
     """
+    base: Path
     if getattr(sys, "frozen", False):
-        base = Path(sys._MEIPASS)  # type: ignore[arg-type]
+        meipass = getattr(sys, "_MEIPASS", None)
+        base = Path(str(meipass)) if meipass else Path()
     else:
         base = Path(__file__).resolve().parent.parent / "assets"
 
@@ -45,12 +49,17 @@ def main() -> None:
     app.setApplicationVersion("0.1.0")
     app.setOrganizationName("MindlessMuse666")
 
+    # Базовый шрифт приложения - чтобы Qt не ругался на Point size <= 0
+    default_font = QFont("Press Start 2P", 10)
+    default_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+    app.setFont(default_font)
+
     # Иконка приложения
     icon_path = _app_icon_path()
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
 
-    # Создаём главное окно
+    # Создаeм главное окно
     window = MainWindow()
 
     # Подключаем логгер к окну
@@ -60,28 +69,38 @@ def main() -> None:
     window.log_message("● готов к загрузке", LOG_COLORS["INFO"])
     window.show()
 
+    # Завершение по CTRL+C (SIGINT) - timer-based, т.к. на Windows
+    # вызов Qt напрямую из сигнального обработчика небезопасен
+    _exit_requested = False
+
+    def _handle_sigint(signum: int, frame: object) -> None:  # noqa: ANN401
+        nonlocal _exit_requested
+        _exit_requested = True
+
+    signal.signal(signal.SIGINT, _handle_sigint)
+
+    # Таймер опрашивает флаг каждые 200 мс
+    _exit_timer = QTimer()
+    _exit_timer.timeout.connect(
+        lambda: app.quit() if _exit_requested else None
+    )
+    _exit_timer.start(200)
+
     sys.exit(app.exec())
 
 
 def _on_log_message(level: str, text: str) -> None:
-    """Обработчик сигнала лога — обновляет GUI в главном потоке.
-
-    Заглушка: будет заменена на прямое обновление окна в Этапе 4.
-    Пока просто печатает в stderr для отладки.
-    """
+    """Обработчик сигнала лога - обновляет GUI в главном потоке."""
     color = LOG_COLORS.get(level, "#CCCCCC")
-    # pylint: disable=import-outside-toplevel
-    from src.gui.main_window import MainWindow  # noqa: F811
 
-    # Ищем активное окно для обновления (пока fallback на print)
+    # Ищем активное окно для обновления
     for widget in QApplication.topLevelWidgets():
         if isinstance(widget, MainWindow):
             widget.log_message(text, color)
             break
     else:
-        # Если окна ещё нет — пишем в консоль
-        import sys as _sys
-        _sys.stderr.write(f"[{level}] {text}\n")  # noqa: NP100
+        # Если окна ещe нет - пишем в консоль
+        sys.stderr.write(f"[{level}] {text}\n")
 
 
 if __name__ == "__main__":

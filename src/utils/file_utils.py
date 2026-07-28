@@ -1,19 +1,46 @@
 """Утилиты для работы с файлами в YouTube Medialoader.
 
-Содержит функции для очистки имён файлов от недопустимых символов
+Содержит функции для очистки имeн файлов от недопустимых символов
 и построения путей.
 """
 
 import re
 import os
-from pathlib import Path
+
+
+# Известные медиа-расширения, которые нужно сохранять как расширение файла.
+KNOWN_EXTENSIONS: frozenset[str] = frozenset({
+    ".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv",
+    ".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".wma", ".opus",
+    ".jpg", ".jpeg", ".png", ".gif", ".webp",
+})
+
+
+def _split_ext(filename: str) -> tuple[str, str]:
+    """Разделить имя файла на основу и расширение.
+
+    Использует белый список известных расширений, чтобы случайно не
+    отрезать часть имени, содержащую точку (например, ``ft.初音ミク``).
+
+    Args:
+        filename: Имя файла.
+
+    Returns:
+        Кортеж ``(stem, suffix)``.
+    """
+    lower = filename.lower()
+    for ext in sorted(KNOWN_EXTENSIONS, key=len, reverse=True):
+        if lower.endswith(ext):
+            return filename[: -len(ext)], filename[-len(ext) :]
+    # Ни одно известное расширение не найдено - вся строка это основа
+    return filename, ""
 
 
 def sanitize_filename(filename: str, max_length: int = 200) -> str:
     """Удалить или заменить символы, недопустимые в имени файла на текущей ОС.
 
-    Вырезает символы, запрещённые в Windows/macOS/Linux, и обрезает результат
-    до `max_length` символов (без учёта расширения).
+    Вырезает символы, запрещeнные в Windows/macOS/Linux, и обрезает результат
+    до `max_length` символов (без учeта расширения).
     Если после очистки имя пустое, возвращает `"untitled"`.
 
     Args:
@@ -23,12 +50,10 @@ def sanitize_filename(filename: str, max_length: int = 200) -> str:
     Returns:
         Очищенное имя файла, безопасное для любой ОС.
     """
-    # Отделяем расширение от основы
-    name_parts = Path(filename)
-    stem = name_parts.stem
-    suffix = name_parts.suffix if len(name_parts.suffix) <= 10 else ""
+    # Отделяем расширение от основы (только по известным расширениям)
+    stem, suffix = _split_ext(filename)
 
-    # Заменяем недопустимые символы на подчёркивание
+    # Заменяем недопустимые символы на подчeркивание
     invalid_chars = r'[<>:"/\\|?*]'
     stem = re.sub(invalid_chars, "_", stem)
 
@@ -36,7 +61,7 @@ def sanitize_filename(filename: str, max_length: int = 200) -> str:
     stem = re.sub(r"[\x00-\x1f\x7f]", "", stem)
     stem = stem.strip(". ")
 
-    # Склеиваем повторяющиеся подчёркивания и пробелы
+    # Склеиваем повторяющиеся подчeркивания и пробелы
     stem = re.sub(r"[_ ]+", "_", stem).strip("_")
 
     # Обрезаем

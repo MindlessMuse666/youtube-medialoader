@@ -5,7 +5,6 @@
 текущей рабочей директории (не только из корня проекта).
 """
 
-import os
 import sys
 from pathlib import Path
 

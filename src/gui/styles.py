@@ -15,30 +15,63 @@ from pathlib import Path
 
 from PySide6.QtGui import QFontDatabase
 
+# Семейство пиксельного шрифта - устанавливается в load_fonts()
+# Если Press Start 2P не загрузился, используется fallback "monospace"
+PIXEL_FONT_FAMILY: str = "monospace"
+
 
 def _assets_dir() -> Path:
     """Вернуть путь к папке ``assets``.
 
-    В режиме разработки — относительно этого файла,
-    в собранном PyInstaller — относительно ``sys._MEIPASS``.
+    В режиме разработки - относительно этого файла,
+    в собранном PyInstaller - относительно ``sys._MEIPASS``.
     """
     if getattr(sys, "frozen", False):
-        return Path(sys._MEIPASS) / "assets"  # type: ignore[arg-type]
+        meipass = getattr(sys, "_MEIPASS", None)
+        return Path(str(meipass)) / "assets" if meipass else Path("assets")
     return Path(__file__).resolve().parent.parent.parent / "assets"
 
 
 def load_fonts() -> None:
-    """Загрузить TTF/OTF-шрифты из ``assets/fonts/`` в QFontDatabase."""
+    """Загрузить TTF/OTF-шрифты из ``assets/fonts/`` в QFontDatabase.
+
+    После загрузки проверяет, доступен ли "Press Start 2P", и обновляет
+    :data:`PIXEL_FONT_FAMILY`.
+    """
+    global PIXEL_FONT_FAMILY  # noqa: PLW0603
+
     fonts_dir = _assets_dir() / "fonts"
     if not fonts_dir.is_dir():
+        PIXEL_FONT_FAMILY = "monospace"
         return
 
     for font_file in fonts_dir.iterdir():
         if font_file.suffix.lower() in (".ttf", ".otf"):
-            QFontDatabase.addApplicationFont(str(font_file))
+            try:
+                QFontDatabase.addApplicationFont(str(font_file))
+            except Exception:
+                # Игнорируем проблемные шрифты - приложение работает и с
+                # системными шрифтами, просто неоновая тема будет менее заметна
+                pass
+
+    # Проверяем, что пиксельный шрифт действительно зарегистрирован
+    if "Press Start 2P" in QFontDatabase.families():
+        PIXEL_FONT_FAMILY = '"Press Start 2P", monospace'
+    else:
+        PIXEL_FONT_FAMILY = "monospace"
 
 
-MAIN_QSS = """
+def get_main_qss() -> str:
+    """Вернуть QSS-строку с корректным семейством пиксельного шрифта.
+
+    Подставляет :data:`PIXEL_FONT_FAMILY` в шаблон ``MAIN_QSS``,
+    чтобы избежать предупреждения ``QFont::setPointSize``, если
+    шрифт Press Start 2P не загружен.
+    """
+    return _MAIN_QSS_TEMPLATE.replace("{PIXEL_FONT}", PIXEL_FONT_FAMILY)
+
+
+_MAIN_QSS_TEMPLATE = """
 /* === Глобальные настройки === */
 QMainWindow {
     background-color: transparent;
@@ -47,12 +80,22 @@ QMainWindow {
 QWidget {
     background-color: transparent;
     color: #FFFFFF;
-    font-family: "Inter", "NotoSansJP", sans-serif;
+    font-family: {PIXEL_FONT};
     font-size: 13px;
 }
 
 /* === Поля ввода === */
-QLineEdit, QComboBox {
+QLineEdit {
+    background-color: #1A1A1A;
+    border: 1px solid #2A2A2A;
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: #FFFFFF;
+    font-size: 13px;
+    min-height: 20px;
+}
+
+QComboBox {
     background-color: #1A1A1A;
     border: 1px solid #2A2A2A;
     border-radius: 6px;
@@ -71,6 +114,8 @@ QLineEdit:focus, QComboBox:focus {
     border: 1px solid #00E5FF;
 }
 
+/* QLineEdit#folderPath - стили по умолчанию */
+
 QComboBox::drop-down {
     border: none;
     width: 30px;
@@ -86,12 +131,14 @@ QComboBox QAbstractItemView {
     border: 1px solid #00E5FF;
     outline: none;
     padding: 4px;
+    font-size: 13px;
 }
 
 QComboBox QAbstractItemView::item {
     color: #FFFFFF;
     padding: 6px 10px;
     min-height: 24px;
+    font-size: 13px;
 }
 
 QComboBox QAbstractItemView::item:selected {
@@ -122,22 +169,28 @@ QTextEdit#logArea {
     border: 1px solid #2A2A2A;
     border-radius: 6px;
     color: #CCCCCC;
-    font-family: "Inter", monospace;
     font-size: 12px;
     padding: 8px;
 }
 
+/* === Кнопки (глобальный bold) === */
+QPushButton {
+    font-weight: bold;
+}
+
 /* === Заголовок === */
 QLabel#titleLabel {
-    font-family: "Press Start 2P";
-    font-size: 18px;
+    font-family: {PIXEL_FONT};
+    font-size: 16pt;
     color: #00E5FF;
+    font-weight: bold;
 }
 
 QLabel#subtitleLabel {
-    font-family: "Press Start 2P";
-    font-size: 9px;
+    font-family: {PIXEL_FONT};
+    font-size: 9pt;
     color: #FF4081;
+    font-weight: bold;
 }
 
 /* === Информационные метки === */
@@ -161,26 +214,27 @@ QLabel#videoDetail {
 QLabel#fixedLabel {
     color: #AAAAAA;
     font-size: 12px;
-    min-width: 75px;
+    min-width: 85px;
+    max-width: 85px;
+    font-weight: normal;
 }
 
 /* === Группы === */
 QGroupBox {
     border: 1px solid #2A2A2A;
     border-radius: 8px;
-    margin-top: 24px;
-    padding: 24px 12px 12px 12px;
-    font-size: 13px;
-    font-weight: normal;
+    margin-top: 32px;
+    padding: 10px 12px 8px;
 }
 
 QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
     padding: 0 8px;
-    font-family: "Press Start 2P";
-    font-size: 11px;
+    font-family: {PIXEL_FONT};
+    font-size: 9pt;
     color: #00E5FF;
+    font-weight: bold;
 }
 
 /* === Кнопка "Очистить логи" === */
@@ -194,6 +248,10 @@ QPushButton#clearLogBtn {
 
 QPushButton#clearLogBtn:hover {
     color: #FF4081;
+}
+
+QPushButton:disabled {
+    font-weight: normal;
 }
 
 /* === Разделитель === */

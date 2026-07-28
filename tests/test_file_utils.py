@@ -2,7 +2,6 @@
 
 import os
 
-import pytest
 from src.utils.file_utils import sanitize_filename, resolve_output_path
 
 
@@ -14,7 +13,7 @@ class TestSanitizeFilename:
         assert sanitize_filename("My Video") == "My_Video"
 
     def test_invalid_chars_replaced(self) -> None:
-        """Недопустимые символы должны заменяться на подчёркивание."""
+        """Недопустимые символы должны заменяться на подчeркивание."""
         result = sanitize_filename('video<>:"/\\|?*name')
         assert "<" not in result
         assert ">" not in result
@@ -29,7 +28,7 @@ class TestSanitizeFilename:
     def test_leading_trailing_dots_spaces(self) -> None:
         """Точки и пробелы по краям должны удаляться."""
         assert sanitize_filename("  video  ") == "video"
-        # Точки по краям удаляются — на Windows имя не может заканчиваться точкой
+        # Точки по краям удаляются - на Windows имя не может заканчиваться точкой
         assert sanitize_filename("..video..") == "video"
 
     def test_empty_after_sanitize_returns_untitled(self) -> None:
@@ -54,7 +53,7 @@ class TestSanitizeFilename:
         assert result == "untitled.mp4"
 
     def test_collapse_spaces(self) -> None:
-        """Несколько пробелов/подчёркиваний должны схлопнуться в один."""
+        """Несколько пробелов/подчeркиваний должны схлопнуться в один."""
         result = sanitize_filename("my   super   video")
         assert "__" not in result
         assert "  " not in result
