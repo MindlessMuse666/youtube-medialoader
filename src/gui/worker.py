@@ -138,3 +138,42 @@ class DownloadWorker(QObject):
             data: Словарь прогресса от yt-dlp.
         """
         self.progress.emit(data)
+
+
+class PlaylistWorker(QObject):
+    """Асинхронное получение списка видео из плейлиста YouTube.
+
+    Запускается в отдельном QThread. Возвращает список видео через
+    сигнал :attr:`playlist_fetched`.
+
+    Сигналы:
+        playlist_fetched: Срабатывает при успешном получении списка.
+            Передаeт список словарей с ключами:
+            ``title``, ``url``, ``duration``, ``thumbnail``, ``index``.
+        error_occurred: Срабатывает при ошибке. Передаeт текст ошибки.
+    """
+
+    playlist_fetched = Signal(list)
+    error_occurred = Signal(str)
+
+    def __init__(self, url: str, parent: QObject | None = None) -> None:
+        """Инициализация рабочего объекта плейлиста.
+
+        Args:
+            url: Ссылка на YouTube-плейлист.
+            parent: Родительский QObject (опционально).
+        """
+        super().__init__(parent)
+        self._url = url
+        self._downloader = YouTubeDownloader()
+
+    def run(self) -> None:
+        """Запустить получение информации о плейлисте.
+
+        Вызывается из QThread.started. Отправляет результат через сигналы.
+        """
+        try:
+            entries = self._downloader.get_playlist_info(self._url)
+            self.playlist_fetched.emit(entries)
+        except Exception as exc:
+            self.error_occurred.emit(str(exc))

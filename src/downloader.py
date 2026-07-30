@@ -137,6 +137,48 @@ class YouTubeDownloader:
 
         return self._normalize_info(info)
 
+    def get_playlist_info(
+        self,
+        url: str,
+    ) -> list[dict[str, Any]]:
+        """Получить список видео из плейлиста YouTube.
+
+        Извлекает метаданные каждого видео в плейлисте:
+        название, URL, длительность, обложку.
+
+        Args:
+            url: Ссылка на YouTube-плейлист (содержит ``list=``).
+
+        Returns:
+            Список словарей, каждый с ключами:
+            ``title``, ``url``, ``duration``, ``thumbnail``, ``index``.
+
+        Raises:
+            yt_dlp.utils.DownloadError: Если URL некорректен или плейлист
+                недоступен.
+        """
+        opts: Any = self._base_opts()
+        opts["extract_flat"] = True  # не качаем полную инфу о каждом видео
+        opts["noplaylist"] = False
+
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+        entries = info.get("entries") or []
+        results: list[dict[str, Any]] = []
+        for entry in entries:
+            if entry is None:
+                continue
+            results.append({
+                "title": entry.get("title", "Untitled"),
+                "url": entry.get("url") or entry.get("webpage_url", ""),
+                "duration": entry.get("duration", 0),
+                "thumbnail": entry.get("thumbnail", ""),
+                "index": entry.get("playlist_index", len(results) + 1),
+            })
+
+        return results
+
     def download(
         self,
         url: str,
@@ -419,6 +461,7 @@ class YouTubeDownloader:
             "title": info.get("title", "Untitled"),
             "duration": info.get("duration", 0),
             "filesize": YouTubeDownloader._estimate_filesize(info),
+            "thumbnail": info.get("thumbnail", ""),
             "formats": YouTubeDownloader._clean_formats(
                 info.get("formats") or []
             ),

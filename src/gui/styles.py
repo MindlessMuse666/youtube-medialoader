@@ -214,8 +214,8 @@ QLabel#videoDetail {
 QLabel#fixedLabel {
     color: #AAAAAA;
     font-size: 12px;
-    min-width: 85px;
-    max-width: 85px;
+    min-width: 115px;
+    max-width: 115px;
     font-weight: normal;
 }
 
@@ -250,6 +250,21 @@ QPushButton#clearLogBtn:hover {
     color: #FF4081;
 }
 
+/* === Кнопка "История" === */
+QPushButton#historyBtn {
+    background-color: transparent;
+    border: 1px solid #00FF88;
+    border-radius: 4px;
+    padding: 4px 10px;
+    color: #00FF88;
+    font-size: 11px;
+}
+
+QPushButton#historyBtn:hover {
+    background-color: rgba(0, 255, 136, 0.1);
+    color: #00FF88;
+}
+
 QPushButton:disabled {
     font-weight: normal;
 }
@@ -264,5 +279,14 @@ QFrame#separator {
 QScrollArea {
     background: transparent;
     border: none;
+}
+
+/* === Статус прогресса (скорость, ETA) === */
+QLabel#progressStatus {
+    color: #AAAAAA;
+    font-size: 11px;
+    padding: 0px;
+    margin: 0px;
+    qproperty-alignment: 'AlignCenter';
 }
 """
