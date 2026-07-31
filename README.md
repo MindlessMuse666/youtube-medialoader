@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/icons/app_icon.png" alt="youtube_medialoader_logo.png" width="200" height="200" />
-   <h1>YouTube Medialoader 🎬</h1>
-   <p><b><i>Десктоп-приложение для скачивания видео и аудио с YouTube ( ͡° ͜ʖ ͡°)</i></b></p>
+   <h1>YouTube Medialoader 🎈</h1>
+   <p><b><i>Десктоп-приложение для скачивания видео и аудио с YouTube </br>ヾ(＠⌒ー⌒＠)ノ</i></b></p>
    <a href="https://www.python.org"><img src="https://img.shields.io/badge/Python-3.12+-3776AB?style=for-the-badge&logo=python" alt="Python" height="35"></a>
    <a href="https://www.qt.io/qt-for-python"><img src="https://img.shields.io/badge/PySide6-6.11-41CD52?style=for-the-badge&logo=qt" alt="PySide6" height="35"></a>
    <a href="https://github.com/yt-dlp/yt-dlp"><img src="https://img.shields.io/badge/yt--dlp-2024.7-FF0000?style=for-the-badge&logo=youtube" alt="yt-dlp" height="35"></a>
@@ -21,7 +21,7 @@
 ## Возможности
 
 | Функция | Описание |
-| ------- | -------- |
+| --- | --- |
 | 🎥 **Видео MP4** | Скачивание видео в 1080p / 720p / 480p |
 | 🎵 **Аудио MP3** | Извлечение аудиодорожки в лучшем качестве |
 | 🔍 **Предпросмотр** | Название, длительность, размер файла, обложка видео до загрузки |
@@ -46,11 +46,12 @@
 
 ### 🏠 После указания ссылки
 
-<img src="screenshots/link_pasted_v1.png" alt="link_pasted_v1.png" width="800" />
+<img src="screenshots/link_pasted_v2.png" alt="link_pasted_v2.png" width="800" />
 
 ### 🎉 Медиа успешно скачано
 
-<img src="screenshots/media_success_load_v1.png" alt="media_success_load_v1.png" width="800" />
+<img src="screenshots/media_success_load_and_alert_v2.png" alt="media_success_load_and_alert_v2.png" width="800" />
+<img src="screenshots/media_success_load_and_logs_v2.png" alt="media_success_load_and_logs_v2.png" width="800" />
 
 ---
 
@@ -75,7 +76,7 @@
 
 ### Desktop
 
-- **Nuitka** - сборка в standalone EXE
+- **PyInstaller** - сборка в standalone EXE
 
 ---
 
@@ -89,40 +90,34 @@
 
 ### Шаги запуска
 
-```bash
+```powershell
 # 1. склонируй репозиторий
 git clone https://github.com/MindlessMuse666/youtube-medialoader.git
 cd youtube-medialoader
 
 # 2. создай виртуальное окружение и установи зависимости
 py -m venv .venv
-source .venv/bin/activate         # Linux/macOS
-.venv\Scripts\activate            # Windows
+.venv\Scripts\activate
 pip install -r requirements.txt
 
 # 3. запусти приложение
 py -m src.main
 ```
 
-### Сборка EXE (Nuitka)
+### Сборка EXE
 
-```bash
-pip install nuitka
-nuitka `
-    --standalone `
-    --onefile `
-    --windows-console-mode=disable `
-    --enable-plugin=pyside6 `
-    --include-data-dir=assets=assets `
-    --output-dir=build `
-    --product-name="YouTube Medialoader" `
-    --file-version="0.2.0" `
-    --file-description="YouTube Medialoader - скачивание видео/аудио с YouTube" `
-    --copyright="MindlessMuse666" `
-    src/main.py
+```powershell
+# 1. перейди в .venv
+.venv\Scripts\activate
+
+# 2. если pyinstaller еще не установлен, то сделай это
+pip install pyinstaller
+
+# 3. собери бинарь командой
+.\.venv\Scripts\pyinstaller --noconfirm --clean --onefile --windowed --name "YouTube Medialoader" --icon "assets\icons\app_icon.ico" --add-data "assets;assets" --collect-all "yt_dlp" --optimize 2 --exclude-module tkinter --exclude-module unittest --exclude-module pydoc --hidden-import "src.gui" --hidden-import "src.utils" --hidden-import "src.gui.animated_background" --hidden-import "src.gui.styles" --hidden-import "src.gui.widgets" --hidden-import "src.gui.worker" --hidden-import "src.gui.download_queue" --hidden-import "src.gui.playlist_dialog" --hidden-import "src.gui.history_dialog" --hidden-import "src.utils.file_utils" --hidden-import "src.utils.logger" --hidden-import "src.utils.history" --hidden-import "src.utils.update_checker" "src\main.py"
 ```
 
-> Готовый `.exe` появится в папке `build/`. Для сборки также можно использовать **PyInstaller**.
+> Готовый `.exe` появится в папке `dist/`.
 
 ---
 
