@@ -13,6 +13,7 @@ __pycache__/
 # BUILD
 dist/
 build/
+nuitka-build/
 *.spec
 
 # IDE
@@ -34,3 +35,4 @@ downloads/
 
 # DOCUMENTATION
 *.md
+.markdownlint.yml
