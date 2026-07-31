@@ -8,7 +8,6 @@ from __future__ import annotations
 import os
 import signal
 import sys
-from pathlib import Path
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QFont, QIcon
@@ -16,6 +15,7 @@ from PySide6.QtWidgets import QApplication
 
 from src.gui.main_window import MainWindow
 from src.gui.widgets import Toast
+from src.utils.file_utils import assets_dir
 from src.utils.logger import get_log_signal
 from src.utils.update_checker import UpdateChecker
 
@@ -33,15 +33,8 @@ def _app_icon_path() -> str:
 
     Учитывает сборку PyInstaller (``sys._MEIPASS``).
     """
-    base: Path
-    if getattr(sys, "frozen", False):
-        meipass = getattr(sys, "_MEIPASS", None)
-        base = Path(str(meipass)) if meipass else Path()
-    else:
-        base = Path(__file__).resolve().parent.parent / "assets"
-
     icon_name = "app_icon.ico" if sys.platform == "win32" else "app_icon.png"
-    return str(base / "icons" / icon_name)
+    return str(assets_dir() / "icons" / icon_name)
 
 
 def main() -> None:

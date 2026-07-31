@@ -10,10 +10,11 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 from PySide6.QtGui import QFontDatabase
+
+from src.utils.file_utils import assets_dir
 
 # Семейство пиксельного шрифта - устанавливается в load_fonts()
 # Если Press Start 2P не загрузился, используется fallback "monospace"
@@ -21,15 +22,8 @@ PIXEL_FONT_FAMILY: str = "monospace"
 
 
 def _assets_dir() -> Path:
-    """Вернуть путь к папке ``assets``.
-
-    В режиме разработки - относительно этого файла,
-    в собранном PyInstaller - относительно ``sys._MEIPASS``.
-    """
-    if getattr(sys, "frozen", False):
-        meipass = getattr(sys, "_MEIPASS", None)
-        return Path(str(meipass)) / "assets" if meipass else Path("assets")
-    return Path(__file__).resolve().parent.parent.parent / "assets"
+    """Вернуть путь к папке ``assets`` (общий хелпер, см. file_utils)."""
+    return assets_dir()
 
 
 def load_fonts() -> None:

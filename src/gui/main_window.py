@@ -64,7 +64,7 @@ from src.gui.widgets import LoadingSpinner, NeonButton, NeonProgressBar, Toast
 from src.gui.history_dialog import HistoryDialog
 from src.gui.playlist_dialog import PlaylistDialog
 from src.gui.worker import DownloadWorker, PlaylistWorker, VideoInfoWorker
-from src.utils.file_utils import sanitize_filename
+from src.utils.file_utils import assets_dir, sanitize_filename
 from src.utils.history import HistoryEntry, HistoryManager
 
 
@@ -240,9 +240,7 @@ class MainWindow(QMainWindow):
 
         icon = QIcon()
         # Пробуем загрузить собственную иконку приложения
-        icon_path = os.path.join(
-            os.path.dirname(__file__), "..", "..", "assets", "icon.png"
-        )
+        icon_path = str(assets_dir() / "icons" / "app_icon.png")
         if os.path.isfile(icon_path):
             icon = QIcon(icon_path)
         else:

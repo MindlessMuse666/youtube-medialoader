@@ -6,6 +6,8 @@
 
 import re
 import os
+import sys
+from pathlib import Path
 
 
 # Известные медиа-расширения, которые нужно сохранять как расширение файла.
@@ -90,3 +92,16 @@ def resolve_output_path(directory: str, filename: str) -> str:
         Абсолютный путь к файлу.
     """
     return os.path.abspath(os.path.join(directory, filename))
+
+
+def assets_dir() -> Path:
+    """Вернуть путь к каталогу ``assets``.
+
+    В режиме разработки - ``<корень проекта>/assets``, в собранном
+    PyInstaller-приложении - ``sys._MEIPASS/assets`` (ресурсы вшиты
+    флагом ``--add-data "assets;assets"``).
+    """
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        return Path(str(meipass)) / "assets" if meipass else Path("assets")
+    return Path(__file__).resolve().parent.parent.parent / "assets"
