@@ -61,7 +61,7 @@ def main() -> None:
     log_signal = get_log_signal()
     log_signal.message_emitted.connect(_on_log_message)
 
-    window.log_message("😜 готов к загрузке", LOG_COLORS["INFO"])
+    window.log_message("😜 Готов к загрузке", LOG_COLORS["INFO"])
     window.show()
 
     # Асинхронная проверка обновлений

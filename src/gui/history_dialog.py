@@ -10,8 +10,7 @@ import os
 from datetime import datetime
 from typing import Optional
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -24,9 +23,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.gui.widgets import Toast
+from src.utils.file_utils import reveal_in_file_manager
 from src.utils.history import HistoryEntry, HistoryManager
 
-_DATETIME_FMT = "%Y-%m-%d %H:%M"
+_DATETIME_FMT = "%Y.%m.%d %H:%M"
 
 
 class HistoryDialog(QDialog):
@@ -64,15 +65,15 @@ class HistoryDialog(QDialog):
         layout.setSpacing(12)
 
         # Заголовок
-        title_label = QLabel("История загрузок")
+        title_label = QLabel("ИСТОРИЯ ЗАГРУЗОК")
         title_label.setObjectName("historyTitle")
         layout.addWidget(title_label)
 
         # Таблица
         self._table = QTableWidget()
-        self._table.setColumnCount(6)
+        self._table.setColumnCount(4)
         self._table.setHorizontalHeaderLabels([
-            "Дата", "Название", "Тип", "Качество", "Размер", ""
+            "Дата", "Название", "Тип", ""
         ])
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -86,9 +87,10 @@ class HistoryDialog(QDialog):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        # Ширина колонки с кнопкой фиксирована: ResizeToContents не учитывает
+        # размер виджета в ячейке, поэтому текст кнопки "ОТКРЫТЬ" обрезался.
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self._table.setColumnWidth(3, 112)
 
         layout.addWidget(self._table, 1)
 
@@ -96,14 +98,14 @@ class HistoryDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
 
-        clear_btn = QPushButton("Очистить историю")
+        clear_btn = QPushButton("ОЧИСТИТЬ ИСТОРИЮ")
         clear_btn.setObjectName("historyClearBtn")
         clear_btn.clicked.connect(self._on_clear)
         btn_layout.addWidget(clear_btn)
 
         btn_layout.addStretch()
 
-        close_btn = QPushButton("Закрыть")
+        close_btn = QPushButton("ЗАКРЫТЬ")
         close_btn.setObjectName("historyCloseBtn")
         close_btn.clicked.connect(self.accept)
         btn_layout.addWidget(close_btn)
@@ -129,30 +131,19 @@ class HistoryDialog(QDialog):
             type_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self._table.setItem(row, 2, type_item)
 
-            # Качество
-            quality_item = QTableWidgetItem(entry.quality)
-            quality_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._table.setItem(row, 3, quality_item)
-
-            # Размер
-            size_str = self._format_size(entry.file_size)
-            size_item = QTableWidgetItem(size_str)
-            size_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._table.setItem(row, 4, size_item)
-
-            # Кнопка "Открыть папку"
-            open_btn = QPushButton("📂 Открыть")
+            # Кнопка "Открыть папку" (выделяет файл в Explorer)
+            open_btn = QPushButton("ОТКРЫТЬ")
             open_btn.setObjectName("historyOpenBtn")
             open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             file_path = entry.file_path
             if file_path and os.path.exists(os.path.dirname(file_path)):
                 open_btn.clicked.connect(
-                    lambda _checked=False, fp=file_path: self._open_folder(fp)
+                    lambda _checked=False, fp=file_path: self._on_open_file(fp)
                 )
             else:
                 open_btn.setEnabled(False)
                 open_btn.setText("-")
-            self._table.setCellWidget(row, 5, open_btn)
+            self._table.setCellWidget(row, 3, open_btn)
 
         # Высота строк
         for row in range(len(entries)):
@@ -163,16 +154,24 @@ class HistoryDialog(QDialog):
         self._history.clear()
         self._table.setRowCount(0)
 
-    @staticmethod
-    def _open_folder(file_path: str) -> None:
-        """Открыть папку с файлом в системном файловом менеджере.
+    def _on_open_file(self, file_path: str) -> None:
+        """Открыть файл в Explorer с выделением, с обработкой удалeнного файла.
+
+        Если файл был удалeн или перемещeн - открывает содержащую папку
+        и показывает тост-предупреждение.
 
         Args:
             file_path: Полный путь к файлу.
         """
+        if os.path.isfile(file_path):
+            reveal_in_file_manager(file_path)
+            return
+
         folder = os.path.dirname(file_path)
         if folder and os.path.isdir(folder):
-            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+            reveal_in_file_manager(folder)
+        toast = Toast("Файл был удалён или перемещён", Toast.WARNING, parent=self)
+        toast.show()
 
     @staticmethod
     def _format_ts(iso_str: str) -> str:
@@ -182,7 +181,7 @@ class HistoryDialog(QDialog):
             iso_str: Время в ISO-формате.
 
         Returns:
-            Отформатированная строка ``YYYY-MM-DD HH:MM``.
+            Отформатированная строка ``YYYY.MM.DD HH:MM``.
         """
         if not iso_str:
             return "-"
@@ -191,27 +190,6 @@ class HistoryDialog(QDialog):
             return dt.strftime(_DATETIME_FMT)
         except (ValueError, TypeError):
             return iso_str[:16]
-
-    @staticmethod
-    def _format_size(size_bytes: int) -> str:
-        """Преобразовать байты в читаемый размер.
-
-        Args:
-            size_bytes: Размер в байтах.
-
-        Returns:
-            Отформатированная строка.
-        """
-        if size_bytes <= 0:
-            return "-"
-        if size_bytes < 1024:
-            return f"{size_bytes} Б"
-        elif size_bytes < 1024**2:
-            return f"{size_bytes / 1024:.1f} КБ"
-        elif size_bytes < 1024**3:
-            return f"{size_bytes / 1024**2:.1f} МБ"
-        else:
-            return f"{size_bytes / 1024**3:.2f} ГБ"
 
     @staticmethod
     def _get_dialog_qss() -> str:
@@ -257,6 +235,7 @@ class HistoryDialog(QDialog):
                 padding: 6px 14px;
                 color: #FF4081;
                 font-size: 11px;
+                min-height: 32px;
             }
             QPushButton#historyClearBtn:hover {
                 background-color: rgba(255, 64, 129, 0.1);
@@ -268,6 +247,7 @@ class HistoryDialog(QDialog):
                 padding: 6px 16px;
                 color: #00E5FF;
                 font-size: 11px;
+                min-height: 32px;
             }
             QPushButton#historyCloseBtn:hover {
                 background-color: rgba(0, 229, 255, 0.1);

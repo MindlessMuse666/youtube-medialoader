@@ -6,12 +6,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import (
+    QAbstractAnimation,
+    QEasingCurve,
+    Qt,
+    QVariantAnimation,
+    Signal,
+)
 from PySide6.QtWidgets import (
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -64,7 +71,7 @@ class _QueueItemWidget(QWidget):
         QueueItemStatus.DOWNLOADING: "#00E5FF",
         QueueItemStatus.COMPLETED: "#00FF88",
         QueueItemStatus.ERROR: "#FF4081",
-        QueueItemStatus.CANCELLED: "#555555",
+        QueueItemStatus.CANCELLED: "#FFC107",
     }
 
     STATUS_LABELS = {
@@ -72,7 +79,7 @@ class _QueueItemWidget(QWidget):
         QueueItemStatus.DOWNLOADING: "скачивается…",
         QueueItemStatus.COMPLETED: "готово",
         QueueItemStatus.ERROR: "ошибка",
-        QueueItemStatus.CANCELLED: "отменено",
+        QueueItemStatus.CANCELLED: "отмена",
     }
 
     def __init__(
@@ -92,7 +99,10 @@ class _QueueItemWidget(QWidget):
 
     def _setup_ui(self) -> None:
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
+        # Внутренние отступы самого элемента - вокруг блока с информацией
+        # о видео. Именно здесь нужно пространство, чтобы записи очереди
+        # выглядели просторнее и не прилипали к рамке списка.
+        layout.setContentsMargins(14, 10, 14, 10)
         layout.setSpacing(8)
 
         # Индекс
@@ -127,15 +137,31 @@ class _QueueItemWidget(QWidget):
         layout.addWidget(status_label)
 
 
-class DownloadQueueWidget(QWidget):
-    """Виджет очереди загрузок.
+class DownloadQueueWidget(QGroupBox):
+    """Виджет очереди загрузок в виде группы с заголовком.
 
-    Отображает список добавленных в очередь элементов, их статус и прогресс.
-    Позволяет очищать завершeнные элементы.
+    Отображает список добавленных в очередь элементов и их статус.
+    Заголовок группы показывает текущее количество элементов; благодаря
+    наследованию от :class:`QGroupBox` внешний вид и внутренние отступы
+    совпадают с остальными блоками окна («Информация», «Логи», …).
+
+    Высота списка подстраивается под содержимое: пока элементов мало -
+    область компактна и показывает их без прокрутки; с ростом очереди она
+    увеличивается до :attr:`MAX_HEIGHT`, а дальше элементы прокручиваются
+    внутри области. Изменение высоты анимируется.
 
     Сигналы:
         queue_changed: Срабатывает при любом изменении очереди.
     """
+
+    # Минимальная высота списка (одна строка).
+    MIN_HEIGHT = 64
+    # Потолок высоты - дальше включается вертикальный скролл.
+    MAX_HEIGHT = 240
+    # Вертикальные отступы внутри скролл-области (сверху и снизу).
+    _SCROLL_PADDING = 8
+    # Длительность анимации изменения высоты, мс.
+    _HEIGHT_ANIM_MS = 200
 
     queue_changed = Signal()
 
@@ -145,60 +171,53 @@ class DownloadQueueWidget(QWidget):
         Args:
             parent: Родительский виджет.
         """
-        super().__init__(parent)
+        super().__init__("ОЧЕРЕДЬ: 0", parent)
         self._items: list[QueueItem] = []
         self._setup_ui()
         self.setVisible(False)
 
     def _setup_ui(self) -> None:
+        # Отступы самого блока держим умеренными - «воздух» вокруг записей
+        # очереди обеспечивают внутренние отступы _QueueItemWidget, а не
+        # рамка группы (см. _QueueItemWidget._setup_ui).
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-
-        # Заголовок
-        header_layout = QHBoxLayout()
-        header_layout.setSpacing(8)
-
-        self._count_label = QLabel("Очередь: 0")
-        self._count_label.setStyleSheet(
-            "color: #00E5FF; font-size: 11px; font-weight: bold;"
-        )
-        header_layout.addWidget(self._count_label)
-
-        header_layout.addStretch()
-
-        clear_btn = QPushButton("Очистить")
-        clear_btn.setStyleSheet("""
-            QPushButton {
-                background: transparent; border: none;
-                color: #FF4081; font-size: 11px;
-                text-decoration: underline;
-            }
-            QPushButton:hover { color: #FF80AB; }
-        """)
-        clear_btn.clicked.connect(self._clear_completed)
-        header_layout.addWidget(clear_btn)
-
-        layout.addLayout(header_layout)
+        layout.setContentsMargins(10, 6, 10, 10)
+        layout.setSpacing(8)
 
         # Список элементов в скролле
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setMaximumHeight(200)
-        scroll.setStyleSheet(
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setFixedHeight(self.MIN_HEIGHT)
+        self._scroll.setStyleSheet(
             "QScrollArea { background: transparent; border: 1px solid #2A2A2A; "
             "border-radius: 4px; }"
         )
 
         self._list_widget = QWidget()
         self._list_layout = QVBoxLayout(self._list_widget)
-        self._list_layout.setSpacing(2)
+        self._list_layout.setSpacing(4)
         self._list_layout.setContentsMargins(0, 0, 0, 0)
         self._list_layout.addStretch()
-        scroll.setWidget(self._list_widget)
+        self._scroll.setWidget(self._list_widget)
 
-        layout.addWidget(scroll)
+        layout.addWidget(self._scroll)
+
+        # Кнопка очистки завершённых - внизу блока
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.addStretch()
+        clear_btn = QPushButton("ОЧИСТИТЬ ЗАВЕРШЕННЫЕ")
+        # Стиль общий с кнопкой «ОЧИСТИТЬ ЛОГИ» (см. QSS #queueClearBtn)
+        clear_btn.setObjectName("queueClearBtn")
+        clear_btn.clicked.connect(self._clear_completed)
+        btn_row.addWidget(clear_btn)
+        layout.addLayout(btn_row)
+
+    # ------------------------------------------------------------------
+    # Публичный API
+    # ------------------------------------------------------------------
 
     def add_item(self, item: QueueItem) -> None:
         """Добавить элемент в очередь.
@@ -233,7 +252,7 @@ class DownloadQueueWidget(QWidget):
         self.queue_changed.emit()
 
     def mark_completed(self, item: QueueItem) -> None:
-        """Отметить элемент как завершeнный.
+        """Отметить элемент как завершённый.
 
         Args:
             item: Элемент для обновления.
@@ -243,7 +262,7 @@ class DownloadQueueWidget(QWidget):
         self.queue_changed.emit()
 
     def mark_error(self, item: QueueItem, error: str) -> None:
-        """Отметить элемент как завершeнный с ошибкой.
+        """Отметить элемент как завершённый с ошибкой.
 
         Args:
             item: Элемент для обновления.
@@ -251,6 +270,16 @@ class DownloadQueueWidget(QWidget):
         """
         item.status = QueueItemStatus.ERROR
         item.error_text = error
+        self._rebuild_list()
+        self.queue_changed.emit()
+
+    def mark_cancelled(self, item: QueueItem) -> None:
+        """Отметить элемент как отменённый пользователем.
+
+        Args:
+            item: Элемент для обновления.
+        """
+        item.status = QueueItemStatus.CANCELLED
         self._rebuild_list()
         self.queue_changed.emit()
 
@@ -271,8 +300,12 @@ class DownloadQueueWidget(QWidget):
         """Вернуть ``True``, если есть ожидающие загрузки элементы."""
         return any(i.status == QueueItemStatus.PENDING for i in self._items)
 
+    # ------------------------------------------------------------------
+    # Внутренняя логика
+    # ------------------------------------------------------------------
+
     def _clear_completed(self) -> None:
-        """Удалить из очереди завершeнные и ошибочные элементы."""
+        """Удалить из очереди завершённые, ошибочные и отменённые элементы."""
         self._items = [
             i
             for i in self._items
@@ -289,7 +322,7 @@ class DownloadQueueWidget(QWidget):
         self.queue_changed.emit()
 
     def _rebuild_list(self) -> None:
-        """Перестроить список виджетов на основе ``_items``."""
+        """Перестроить список виджетов и обновить заголовок группы."""
         # Очищаем layout (оставляем stretch)
         while self._list_layout.count() > 1:
             child = self._list_layout.takeAt(0)
@@ -301,6 +334,49 @@ class DownloadQueueWidget(QWidget):
             widget = _QueueItemWidget(item, i)
             self._list_layout.insertWidget(i, widget)
 
-        # Обновляем счeтчик
-        total = len(self._items)
-        self._count_label.setText(f"Очередь: {total}")
+        # Обновляем заголовок группы с количеством элементов
+        self.setTitle(f"ОЧЕРЕДЬ: {len(self._items)}")
+        self._update_scroll_height()
+
+    def _update_scroll_height(self) -> None:
+        """Подогнать высоту списка под содержимое очереди.
+
+        Идеальная высота - сумма высот всех строк плюс отступы. Пока она не
+        превышает :attr:`MAX_HEIGHT`, область компактна и скролл не нужен;
+        иначе высота фиксируется на потолке, а лишние элементы прокручиваются.
+        """
+        content_h = 0
+        for i in range(self._list_layout.count()):
+            item = self._list_layout.itemAt(i)
+            widget = item.widget() if item is not None else None
+            if widget is not None:
+                content_h += widget.sizeHint().height()
+        # Расстояния между строками (включая отступ перед stretch)
+        if self._items:
+            content_h += self._list_layout.spacing() * len(self._items)
+        content_h += self._SCROLL_PADDING
+
+        target = min(max(content_h, self.MIN_HEIGHT), self.MAX_HEIGHT)
+
+        # Скрытый или практически не изменившийся виджет меняем без анимации.
+        if not self.isVisible() or abs(self._scroll.height() - target) < 2:
+            self._scroll.setFixedHeight(target)
+            return
+        self._animate_scroll_height(target)
+
+    def _animate_scroll_height(self, target: int) -> None:
+        """Плавно изменить высоту списка до *target*.
+
+        Args:
+            target: Целевая высота в пикселях.
+        """
+        anim = QVariantAnimation(self)
+        anim.setStartValue(self._scroll.height())
+        anim.setEndValue(target)
+        anim.setDuration(self._HEIGHT_ANIM_MS)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.valueChanged.connect(
+            lambda value: self._scroll.setFixedHeight(int(value))
+        )
+        anim.finished.connect(lambda: self._scroll.setFixedHeight(target))
+        anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)

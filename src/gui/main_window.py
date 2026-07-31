@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import html
 import os
+import re
 from typing import Any
 from urllib.parse import urlparse
 
@@ -27,7 +29,6 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtGui import (
     QCloseEvent,
-    QDesktopServices,
     QDragEnterEvent,
     QDropEvent,
     QFont,
@@ -64,8 +65,32 @@ from src.gui.widgets import LoadingSpinner, NeonButton, NeonProgressBar, Toast
 from src.gui.history_dialog import HistoryDialog
 from src.gui.playlist_dialog import PlaylistDialog
 from src.gui.worker import DownloadWorker, PlaylistWorker, VideoInfoWorker
-from src.utils.file_utils import assets_dir, sanitize_filename
+from src.utils.file_utils import (
+    assets_dir,
+    resolve_filename,
+    reveal_in_file_manager,
+)
 from src.utils.history import HistoryEntry, HistoryManager
+
+
+# Press Start 2P не содержит глифов эмодзи: без явного шрифта-фолбэка Qt
+# рисует эмодзи системным шрифтом в уменьшенном размере. Эти константы
+# используются в :meth:`MainWindow.log_message`, чтобы эмодзи в логах
+# были читабельными на фоне пиксельного текста.
+_EMOJI_FONT_STYLE = (
+    "font-family: 'Segoe UI Emoji', 'Apple Color Emoji', "
+    "'Noto Color Emoji', sans-serif; font-size: 16px;"
+)
+
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F000-\U0001FAFF"     # основные блоки эмодзи (лица, жесты, объекты)
+    "\U00002300-\U000023FF"     # технические символы (⏳, ⏹, ⌚)
+    "\U000025A0-\U000027BF"     # геометрия, символы, дингбаты (✅, ⚠)
+    "\U00002B00-\U00002BFF"     # разные символы (⭐, ➡)
+    "\U0001F1E6-\U0001F1FF"     # региональные индикаторы (флаги)
+    "]+"
+)
 
 
 class MainWindow(QMainWindow):
@@ -84,6 +109,14 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("YouTube Medialoader")
         self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)
         self.resize(780, 720)
+
+        # Флаг: пользователь вводил имя файла вручную?
+        self._is_custom_filename = False
+
+        # Последнее полученное название видео (для дефолтного имени файла).
+        # Эти два атрибута должны существовать ДО _load_settings(): смена
+        # формата при восстановлении настроек вызывает _on_type_changed.
+        self._current_video_title: str = ""
 
         # Загружаем шрифты один раз при старте
         load_fonts()
@@ -119,6 +152,10 @@ class MainWindow(QMainWindow):
 
         # Системный трей
         self._tray_icon: QSystemTrayIcon | None = None
+        # Путь к файлу, показанному в последнем системном уведомлении.
+        # По клику на уведомление открываем именно этот файл, даже если
+        # после него уже успела начаться новая загрузка.
+        self._notify_path: str | None = None
         self._setup_tray()
 
         # Состояние раскрытия панели управления
@@ -129,12 +166,6 @@ class MainWindow(QMainWindow):
         self._fetch_timer.setSingleShot(True)
         self._fetch_timer.setInterval(500)
         self._fetch_timer.timeout.connect(self._on_fetch_timer_timeout)
-
-        # Флаг: пользователь вводил имя файла вручную?
-        self._is_custom_filename = False
-
-        # Последнее полученное название видео (для дефолтного имени файла)
-        self._current_video_title: str = ""
 
         # Ссылка на текущий поток и worker предпросмотра
         self._info_thread: QThread | None = None
@@ -189,7 +220,8 @@ class MainWindow(QMainWindow):
 
         # Качество (0 = 1080p, 1 = 720p, 2 = 480p)
         qual_idx = settings.value("save/quality", 1, type=int)
-        if 0 <= qual_idx <= 2:
+        # None бывает при повреждённых/нечисловых настройках - пропускаем.
+        if qual_idx is not None and 0 <= qual_idx <= 2:
             self.quality_combo.setCurrentIndex(qual_idx)
 
         # Недавние ссылки (последние 10) - сохраняем для автодополнения
@@ -263,6 +295,7 @@ class MainWindow(QMainWindow):
 
         self._tray_icon.setContextMenu(tray_menu)
         self._tray_icon.activated.connect(self._on_tray_activated)
+        self._tray_icon.messageClicked.connect(self._on_tray_message_clicked)
 
         self._tray_icon.show()
 
@@ -285,6 +318,24 @@ class MainWindow(QMainWindow):
         """
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._toggle_tray_window()
+
+    def _on_tray_message_clicked(self) -> None:
+        """Открыть скачанный файл по клику на системное уведомление.
+
+        Показывает файл в Explorer с выделением (как кнопка «Открыть
+        папку»). Если файл уже удалeн - открывает содержащую папку.
+        """
+        path = self._notify_path
+        if not path:
+            return
+
+        if os.path.isfile(path):
+            reveal_in_file_manager(path)
+            return
+
+        folder = os.path.dirname(path)
+        if folder and os.path.isdir(folder):
+            reveal_in_file_manager(folder)
 
     def _quit_app(self) -> None:
         """Полный выход из приложения (включая скрытие в трей).
@@ -466,7 +517,7 @@ class MainWindow(QMainWindow):
 
     def _build_save_section(self, parent: QVBoxLayout) -> None:
         """Группа полей: папка сохранения и имя файла."""
-        group = QGroupBox("Сохранение")
+        group = QGroupBox("СОХРАНЕНИЕ")
         group_layout = QVBoxLayout(group)
         group_layout.setSpacing(8)
 
@@ -518,7 +569,7 @@ class MainWindow(QMainWindow):
 
         Содержит миниатюру слева и текстовую информацию справа.
         """
-        self.info_group = QGroupBox("Информация")
+        self.info_group = QGroupBox("ИНФОРМАЦИЯ")
 
         # Горизонтальный layout: обложка | текст
         info_h_layout = QHBoxLayout(self.info_group)
@@ -600,8 +651,8 @@ class MainWindow(QMainWindow):
 
         self.download_btn = NeonButton("СКАЧАТЬ")
         self.cancel_btn = NeonButton("ОТМЕНА", accent_color="#FF4081")
-        self.cancel_btn.setEnabled(False)
-        self.open_folder_btn = NeonButton("📂 ОТКРЫТЬ ПАПКУ")
+        self.cancel_btn.setVisible(False)
+        self.open_folder_btn = NeonButton("ОТКРЫТЬ ПАПКУ")
         self.open_folder_btn.setVisible(False)
 
         btn_row.addStretch()
@@ -630,9 +681,9 @@ class MainWindow(QMainWindow):
 
     def _build_log_section(self, parent: QVBoxLayout) -> None:
         """Область логов с кнопкой очистки."""
-        group = QGroupBox("Логи")
+        group = QGroupBox("ЛОГИ")
         group_layout = QVBoxLayout(group)
-        group_layout.setSpacing(6)
+        group_layout.setSpacing(10)
 
         self.log_area = QTextEdit()
         self.log_area.setObjectName("logArea")
@@ -641,14 +692,14 @@ class MainWindow(QMainWindow):
         group_layout.addWidget(self.log_area)
 
         log_btn_row = QHBoxLayout()
-        self.history_btn = QPushButton("📋 История")
+        self.history_btn = QPushButton("ИСТОРИЯ")
         self.history_btn.setObjectName("historyBtn")
         self.history_btn.clicked.connect(self._on_open_history)
         log_btn_row.addWidget(self.history_btn)
 
         log_btn_row.addStretch()
 
-        self.clear_log_btn = QPushButton("Очистить логи")
+        self.clear_log_btn = QPushButton("ОЧИСТИТЬ ЛОГИ")
         self.clear_log_btn.setObjectName("clearLogBtn")
         log_btn_row.addWidget(self.clear_log_btn)
         group_layout.addLayout(log_btn_row)
@@ -783,6 +834,20 @@ class MainWindow(QMainWindow):
         elif not has_text and self._controls_expanded:
             self._collapse_controls()
 
+        # Новая ссылка в поле: сбрасываем результат предыдущей загрузки,
+        # если сейчас ничего не скачивается (иначе прогресс-бар будет
+        # висеть на "ЗАВЕРШЕНО!" от предыдущего видео).
+        if (
+            has_text
+            and self._download_thread is None
+            and hasattr(self, "progress_bar")
+        ):
+            self.progress_bar.reset()
+            self._progress_status_label.setText("")
+            # Результат старой загрузки сброшен - кнопка «Открыть папку»
+            # к прежнему файлу больше не нужна.
+            self.open_folder_btn.setVisible(False)
+
         # Сбросить предпросмотр при пустом поле
         if not has_text:
             self._cancel_pending_fetch()
@@ -796,25 +861,20 @@ class MainWindow(QMainWindow):
     def _on_type_changed(self, index: int) -> None:
         """Скрыть/показать выбор качества при переключении на MP3.
 
-        Также обновляет расширение файла, если пользователь не вводил имя вручную.
+        Расширение больше не хранится в поле имени файла, поэтому при смене
+        типа формат подставится автоматически уже при самой загрузке.
 
         Args:
             index: 0 - Видео (MP4), 1 - Аудио (MP3).
         """
         is_audio = index == 1  # Аудио (MP3)
-        self.quality_combo.setEnabled(not is_audio)
-        self.quality_combo.setVisible(not is_audio)
+        # hasattr-защита: сигнал может прийти раньше создания виджетов
+        # (например, при addItems() в _build_type_quality).
+        if hasattr(self, "quality_combo"):
+            self.quality_combo.setEnabled(not is_audio)
+            self.quality_combo.setVisible(not is_audio)
         if hasattr(self, "_quality_label"):
             self._quality_label.setVisible(not is_audio)
-
-        # Обновить расширение файла, если пользователь не редактировал имя
-        if not self._is_custom_filename and self._current_video_title:
-            current_text = self.filename_input.text()
-            base_name = sanitize_filename(self._current_video_title)
-            new_ext = ".mp3" if is_audio else ".mp4"
-            new_name = f"{base_name}{new_ext}"
-            if current_text != new_name:
-                self.filename_input.setText(new_name)
 
     # ------------------------------------------------------------------
     # Асинхронный предпросмотр (Этап 3)
@@ -1039,15 +1099,11 @@ class MainWindow(QMainWindow):
         thumbnail_url: str = info.get("thumbnail", "")
         self._load_thumbnail(thumbnail_url)
 
-        # Если пользователь не вводил своe имя - подставляем название видео
+        # Если пользователь не вводил своe имя - подставляем оригинальное
+        # название видео: без расширения и без замены пробелов подчeркиваниями.
+        # Нужное расширение добавится при загрузке (см. resolve_filename).
         if not self._is_custom_filename:
-            safe_name = sanitize_filename(title)
-            # Определяем расширение
-            if self.type_combo.currentIndex() == 1:  # MP3
-                ext = ".mp3"
-            else:
-                ext = ".mp4"
-            self.filename_input.setText(f"{safe_name}{ext}")
+            self.filename_input.setText(title)
 
         self._complete_fetch()
 
@@ -1108,9 +1164,9 @@ class MainWindow(QMainWindow):
 
                 count = 0
                 for entry in selected:
-                    safe_name = sanitize_filename(entry.get("title", "untitled"))
-                    ext = ".mp4" if format_type == "mp4" else ".mp3"
-                    filename = f"{safe_name}{ext}"
+                    filename = resolve_filename(
+                        entry.get("title", "untitled"), format_type
+                    )
 
                     item = QueueItem(
                         url=entry.get("url", ""),
@@ -1129,8 +1185,7 @@ class MainWindow(QMainWindow):
                 )
 
                 # Запускаем обработку очереди
-                if self._download_worker is None:
-                    self._process_queue()
+                self._process_queue()
             else:
                 self.show_toast("Не выбрано ни одного видео", Toast.WARNING)
 
@@ -1215,20 +1270,13 @@ class MainWindow(QMainWindow):
     def _on_filename_changed(self, text: str) -> None:
         """Отследить, вводил ли пользователь имя файла вручную.
 
-        Сбрасывает флаг, если имя совпадает с дефолтным (для любого расширения).
+        Флаг сбрасывается, если имя совпадает с дефолтным (оригинальное
+        название видео), и устанавливается при любом ручном изменении.
 
         Args:
             text: Текущее содержимое поля имени файла.
         """
-        if not text:
-            self._is_custom_filename = False
-        else:
-            base = sanitize_filename(self._current_video_title)
-            # Проверяем оба расширения - MP4 и MP3
-            expected_mp4 = f"{base}.mp4"
-            expected_mp3 = f"{base}.mp3"
-            if text != expected_mp4 and text != expected_mp3:
-                self._is_custom_filename = True
+        self._is_custom_filename = bool(text) and text != self._current_video_title
 
     # ------------------------------------------------------------------
     # Валидация URL
@@ -1467,8 +1515,8 @@ class MainWindow(QMainWindow):
         format_type = "mp4" if self.type_combo.currentIndex() == 0 else "mp3"
         quality = self.quality_combo.currentText()
 
-        # Создаeм элемент очереди
-        safe_name = sanitize_filename(filename)
+        # Создаeм элемент очереди: имя получает расширение выбранного формата
+        safe_name = resolve_filename(filename, format_type)
         item = QueueItem(
             url=url,
             output_path=output_path,
@@ -1487,21 +1535,27 @@ class MainWindow(QMainWindow):
             "#00E5FF",
         )
 
-        # Запускаем обработку очереди, если ничего не скачивается
-        if self._download_worker is None:
-            self._process_queue()
+        # Запускаем обработку очереди. Если загрузка уже идёт, _process_queue
+        # сам дождётся еe завершения и запустит этот элемент следующим.
+        self._process_queue()
 
     def _process_queue(self) -> None:
         """Обработать следующий элемент в очереди.
 
         Берeт следующий ожидающий элемент из очереди и запускает
-        его загрузку в отдельном потоке.
+        его загрузку в отдельном потоке. Если загрузка уже активна -
+        ничего не делает: еe завершение (или отмена) само запустит
+        следующий элемент.
         """
+        # Если загрузка уже идёт - не запускаем вторую параллельно.
+        if self._download_thread is not None:
+            return
+
         item = self._queue_widget.next_pending()
         if item is None:
             # Очередь пуста - разблокируем UI
-            self.download_btn.setEnabled(True)
-            self.cancel_btn.setEnabled(False)
+            self.download_btn.setVisible(True)
+            self.cancel_btn.setVisible(False)
             self.type_combo.setEnabled(True)
             self.quality_combo.setEnabled(True)
             self.log_message("✅ Все загрузки завершены", "#00FF88")
@@ -1511,9 +1565,10 @@ class MainWindow(QMainWindow):
         self._queue_widget.mark_downloading(item)
         self._current_queue_item = item
 
-        # Блокируем UI на время загрузки
-        self.download_btn.setEnabled(False)
-        self.cancel_btn.setEnabled(True)
+        # Блокируем UI на время загрузки: кнопку "СКАЧАТЬ" прячем, чтобы
+        # пользователь не мог запустить параллельную загрузку.
+        self.download_btn.setVisible(False)
+        self.cancel_btn.setVisible(True)
         self.open_folder_btn.setVisible(False)
         self.type_combo.setEnabled(False)
         self.quality_combo.setEnabled(False)
@@ -1529,24 +1584,32 @@ class MainWindow(QMainWindow):
         self._last_download_path = os.path.join(item.output_path, item.filename)
 
         # Создаeм поток и worker
-        self._download_thread = QThread(self)
-        self._download_worker = DownloadWorker(
+        thread = QThread(self)
+        worker = DownloadWorker(
             url=item.url,
             output_path=item.output_path,
             filename=item.filename,
             format_type=item.format_type,
             quality=item.quality,
         )
-        self._download_worker.moveToThread(self._download_thread)
+        worker.moveToThread(thread)
 
         # Подключаем сигналы
-        self._download_thread.started.connect(self._download_worker.run)
-        self._download_worker.progress.connect(self._on_download_progress)
-        self._download_worker.finished.connect(self._on_download_finished)
-        self._download_worker.error_occurred.connect(self._on_download_error)
-        self._download_thread.finished.connect(self._cleanup_download)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_download_progress)
+        worker.finished.connect(self._on_download_finished)
+        worker.error_occurred.connect(self._on_download_error)
+        # Уборку привязываем к конкретной паре (thread, worker): когда старый
+        # поток завершается уже после старта следующего, его finished-сигнал
+        # не заденет новый поток (иначе - QThread: Destroyed while running).
+        thread.finished.connect(
+            lambda t=thread, w=worker: self._cleanup_download(t, w)
+        )
 
-        self._download_thread.start()
+        self._download_thread = thread
+        self._download_worker = worker
+
+        thread.start()
 
         self.log_message(
             f"📥 Скачивание в: {item.output_path}",
@@ -1556,37 +1619,47 @@ class MainWindow(QMainWindow):
     def _on_cancel_clicked(self) -> None:
         """Отменить текущую загрузку.
 
-        Устанавливает ``cancel_event``, вызывая остановку yt-dlp
-        через progress-hook, затем завершает поток.
+        Устанавливает ``cancel_event`` (yt-dlp остановится на ближайшем
+        progress-hook), помечает элемент очереди как отменённый и переходит
+        к следующему элементу очереди.
         """
-        if self._download_worker is None and self._download_thread is None:
+        worker = self._download_worker
+        thread = self._download_thread
+        if worker is None and thread is None:
             return
 
-        self.cancel_btn.setEnabled(False)
-        self.download_btn.setEnabled(True)
+        self.cancel_btn.setVisible(False)
+        self.download_btn.setVisible(True)
         self.open_folder_btn.setVisible(False)
         self.type_combo.setEnabled(True)
         self.quality_combo.setEnabled(True)
+        self.progress_bar.reset()
         self._progress_status_label.setText("")
 
-        # Отмечаем элемент очереди как отменeнный
-        if self._current_queue_item is not None:
-            title = self._current_queue_item.title or "файл"
-            self.log_message(f"⏹ [{title[:40]}]: отмена загрузки", "#FFC107")
-            self._current_queue_item = None
+        # Отмечаем элемент очереди как отменённый
+        item = self._current_queue_item
+        self._current_queue_item = None
+        if item is not None:
+            self._queue_widget.mark_cancelled(item)
+            title = item.title or "файл"
+            self.log_message(f"⏹ [{title[:40]}]: загрузка отменена", "#FFC107")
         else:
             self.log_message("⏹ Отмена загрузки...", "#FFC107")
         self.show_toast("Отмена загрузки…", Toast.WARNING)
 
-        if self._download_worker is not None:
-            self._download_worker.cancel_event.set()
+        # Просим yt-dlp остановиться
+        if worker is not None:
+            worker.cancel_event.set()
 
-        if self._download_thread is not None:
-            self._download_thread.quit()
-            if not self._download_thread.wait(1000):
-                self._download_thread.finished.connect(self._cleanup_download)
-            else:
-                self._cleanup_download()
+        # Освобождаем ссылки до запуска следующего элемента: старый поток
+        # доработает в фоне, а его finished-сигнал вызовет _cleanup_download
+        # с явными ссылками и не заденет новый поток.
+        self._download_worker = None
+        self._download_thread = None
+
+        if thread is not None:
+            thread.quit()
+            thread.wait(1000)
 
         # Запускаем следующий элемент очереди
         self._process_queue()
@@ -1599,6 +1672,11 @@ class MainWindow(QMainWindow):
         Args:
             data: Словарь прогресса от :class:`YouTubeDownloader`.
         """
+        # Игнорируем устаревшие сигналы от worker'а, который больше
+        # не является текущим (например, при отмене предыдущей загрузки).
+        if self.sender() is not self._download_worker:
+            return
+
         status = data.get("status", "")
         if status == "downloading":
             total = data.get("total_bytes") or data.get("total_bytes_estimate", 0)
@@ -1651,20 +1729,35 @@ class MainWindow(QMainWindow):
         Отмечает элемент в очереди как завершeнный, показывает
         кнопку "Открыть папку" и запускает следующий элемент очереди.
         """
-        self.progress_bar.animate_to(100)
-        self.cancel_btn.setEnabled(False)
+        # Игнорируем устаревшие сигналы от worker'а, который больше
+        # не является текущим (например, при отмене предыдущей загрузки).
+        if self.sender() is not self._download_worker:
+            return
+
+        self.progress_bar.complete()
+        self.cancel_btn.setVisible(False)
         self.open_folder_btn.setVisible(True)
         self._progress_status_label.setText("")
 
-        # Отмечаем элемент очереди как завершeнный
-        if self._current_queue_item is not None:
-            self._queue_widget.mark_completed(self._current_queue_item)
-            title = self._current_queue_item.title or "файл"
+        # Захватываем ссылки до их обнуления: завершившийся поток будет
+        # прибран _cleanup_download(thread, worker), когда его finished-сигнал
+        # дойдёт до GUI-потока (возможно, уже после старта следующей загрузки).
+        item = self._current_queue_item
+        self._current_queue_item = None
+        thread = self._download_thread
+        self._download_worker = None
+        self._download_thread = None
+
+        if item is not None:
+            self._queue_widget.mark_completed(item)
+            title = item.title or "файл"
             self.log_message(f"✅ [{title[:40]}]: загрузка завершена!", "#00FF88")
             self.show_toast(f"Загрузка завершена: {title[:30]}", Toast.SUCCESS)
 
-            # Уведомление в системный трей
+            # Уведомление в системный трей. Запоминаем путь к файлу, чтобы
+            # клик по уведомлению открыл именно его (см. _on_tray_message_clicked).
             if self._tray_icon is not None:
+                self._notify_path = self._last_download_path
                 self._tray_icon.showMessage(
                     "YouTube Medialoader",
                     f"Загрузка завершена: {title[:50]}",
@@ -1677,32 +1770,42 @@ class MainWindow(QMainWindow):
             if self._last_download_path and os.path.isfile(self._last_download_path):
                 file_size = os.path.getsize(self._last_download_path)
             entry = HistoryEntry(
-                title=self._current_queue_item.title or title,
-                url=self._current_queue_item.url,
-                format_type=self._current_queue_item.format_type,
-                quality=self._current_queue_item.quality,
+                title=item.title or title,
+                url=item.url,
+                format_type=item.format_type,
+                quality=item.quality,
                 file_path=self._last_download_path or "",
                 file_size=file_size,
             )
             self._history_manager.add(entry)
-
-            self._current_queue_item = None
         else:
             self.log_message("✅ Загрузка завершена!", "#00FF88")
             self.show_toast("Загрузка завершена!", Toast.SUCCESS)
 
-        if self._download_thread is not None:
-            self._download_thread.quit()
+        if thread is not None:
+            thread.quit()
 
         # Запускаем следующий элемент очереди
         self._process_queue()
 
     def _on_open_folder_clicked(self) -> None:
-        """Открыть папку с загруженным файлом в системном файловом менеджере."""
-        if self._last_download_path:
-            folder = os.path.dirname(self._last_download_path)
-            if os.path.isdir(folder):
-                QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        """Открыть папку с файлом и выделить сам файл в Explorer.
+
+        Если файл был удалeн или перемещeн - открывает содержащую папку
+        и показывает предупреждение.
+        """
+        path = self._last_download_path or ""
+        if not path:
+            return
+
+        if os.path.isfile(path):
+            reveal_in_file_manager(path)
+            return
+
+        folder = os.path.dirname(path)
+        if folder and os.path.isdir(folder):
+            reveal_in_file_manager(folder)
+        self.show_toast("Файл был удалён или перемещён", Toast.WARNING)
 
     def _on_download_error(self, error_text: str) -> None:
         """Обработать ошибку загрузки.
@@ -1713,36 +1816,55 @@ class MainWindow(QMainWindow):
         Args:
             error_text: Текст ошибки.
         """
-        self.cancel_btn.setEnabled(False)
+        # Игнорируем устаревшие сигналы от worker'а, который больше
+        # не является текущим.
+        if self.sender() is not self._download_worker:
+            return
+
+        self.cancel_btn.setVisible(False)
         self.open_folder_btn.setVisible(False)
         self.progress_bar.reset()
         self._progress_status_label.setText("")
 
-        # Отмечаем элемент очереди как ошибочный
-        if self._current_queue_item is not None:
-            self._queue_widget.mark_error(self._current_queue_item, error_text)
-            title = self._current_queue_item.title or "файл"
+        item = self._current_queue_item
+        self._current_queue_item = None
+        thread = self._download_thread
+        self._download_worker = None
+        self._download_thread = None
+
+        if item is not None:
+            self._queue_widget.mark_error(item, error_text)
+            title = item.title or "файл"
             self.log_message(f"❌ [{title[:40]}]: {error_text}", "#FF4081")
             self.show_toast(f"Ошибка: {title[:30]}", Toast.ERROR)
-            self._current_queue_item = None
         else:
             self.log_message(f"❌ Ошибка: {error_text}", "#FF4081")
             self.show_toast(f"Ошибка загрузки: {error_text}", Toast.ERROR)
 
-        if self._download_thread is not None:
-            self._download_thread.quit()
+        if thread is not None:
+            thread.quit()
 
         # Запускаем следующий элемент очереди
         self._process_queue()
 
-    def _cleanup_download(self) -> None:
-        """Очистить ресурсы после завершения загрузки."""
-        if self._download_worker is not None:
-            self._download_worker.deleteLater()
-            self._download_worker = None
-        if self._download_thread is not None:
-            self._download_thread.deleteLater()
+    def _cleanup_download(self, thread: QThread, worker: DownloadWorker) -> None:
+        """Освободить ресурсы конкретного потока и worker'а.
+
+        Принимает явные ссылки на завершившийся поток и worker: уборка
+        одного потока никогда не заденет уже запущенный следующий
+        (иначе при последовательной загрузке из очереди возникает
+        ``QThread: Destroyed while thread '' is still running``).
+
+        Args:
+            thread: Завершившийся :class:`QThread`.
+            worker: Связанный с ним :class:`DownloadWorker`.
+        """
+        if thread is self._download_thread:
             self._download_thread = None
+        if worker is self._download_worker:
+            self._download_worker = None
+        worker.deleteLater()
+        thread.deleteLater()
 
     def _on_clear_log_clicked(self) -> None:
         """Очистить область логов."""
@@ -1757,14 +1879,37 @@ class MainWindow(QMainWindow):
     # Публичные методы (для использования из Worker)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _wrap_emoji(text: str) -> str:
+        """Обернуть эмодзи в ``<span>`` с обычным шрифтом и увеличенным размером.
+
+        Press Start 2P не содержит глифов эмодзи, поэтому без явного
+        шрифта-фолбэка они рисуются системным шрифтом и выглядят слишком
+        мелкими. Параметр *text* уже должен быть экранирован как HTML.
+
+        Args:
+            text: Экранированный HTML-текст сообщения.
+
+        Returns:
+            Текст с обёрнутыми в ``<span>`` эмодзи.
+        """
+        return _EMOJI_RE.sub(
+            lambda m: f'<span style="{_EMOJI_FONT_STYLE}">{m.group(0)}</span>',
+            text,
+        )
+
     def log_message(self, message: str, color: str = "#CCCCCC") -> None:
         """Добавить цветное сообщение в область логов.
+
+        Текст экранируется от HTML-инъекций, а эмодзи оборачиваются
+        в span с обычным шрифтом (см. :meth:`_wrap_emoji`).
 
         Args:
             message: Текст сообщения.
             color: CSS-цвет (например, ``"#00E5FF"``).
         """
-        self.log_area.append(f'<span style="color: {color}">{message}</span>')
+        content = self._wrap_emoji(html.escape(message))
+        self.log_area.append(f'<span style="color: {color}">{content}</span>')
 
     def show_toast(
         self, text: str, border_color: str = Toast.INFO

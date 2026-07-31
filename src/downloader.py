@@ -224,13 +224,11 @@ class YouTubeDownloader:
         """
         self._cancel_event = cancel_event
 
-        safe_name = sanitize_filename(filename)
-        base, ext = os.path.splitext(safe_name)
-        if not ext:
-            ext = f".{format_type}" if format_type == "mp4" else ".mp3"
-        safe_name = f"{base}{ext}"
-
-        outtmpl = os.path.join(output_path, safe_name)
+        # outtmpl собираем с учeтом постобработки: для mp3 расширение в
+        # шаблоне НЕ указываем - иначе FFmpegExtractAudio заменит уже
+        # существующее ".mp3" на ".mp3" и файл получится "<имя>.mp3.mp3".
+        out_name = self._resolve_out_name(filename, format_type)
+        outtmpl = os.path.join(output_path, out_name)
 
         cookie_browsers = (
             cookies_from_browser
@@ -272,6 +270,30 @@ class YouTubeDownloader:
     # ------------------------------------------------------------------
     # Внутренние helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_out_name(filename: str, format_type: str) -> str:
+        """Определить имя для шаблона вывода ``outtmpl``.
+
+        Для ``mp3`` расширение в шаблоне **не** указывается: промежуточный
+        файл (``m4a``/``webm``) получит расширение автоматически, а
+        ``FFmpegExtractAudio`` при постобработке заменит его на ``.mp3``.
+        Если же расширение оставить в шаблоне - замена даст двойное
+        расширение (``<имя>.mp3.mp3``). Для ``mp4`` имя фиксируется с
+        расширением ``.mp4`` (совпадает с ``merge_output_format``).
+
+        Args:
+            filename: Желаемое имя файла (может содержать расширение).
+            format_type: ``"mp4"`` или ``"mp3"``.
+
+        Returns:
+            Имя для шаблона вывода без абсолютного пути.
+        """
+        safe = sanitize_filename(filename)
+        base, _ext = os.path.splitext(safe)
+        if format_type == "mp3":
+            return base
+        return f"{base}.mp4"
 
     @staticmethod
     def _extract(url: str, opts: Any) -> Any:

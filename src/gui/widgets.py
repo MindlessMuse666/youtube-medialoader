@@ -14,16 +14,26 @@ from PySide6.QtCore import (
     QEvent,
     QPoint,
     QPropertyAnimation,
+    QRectF,
     Qt,
     QTimer,
+    QVariantAnimation,
 )
-from PySide6.QtGui import QColor, QEnterEvent, QFont, QFontMetrics, QShowEvent
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QEnterEvent,
+    QLinearGradient,
+    QPainter,
+    QPen,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
-    QProgressBar,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -159,38 +169,201 @@ class NeonButton(QPushButton):
 # ---------------------------------------------------------------------------
 
 
-class NeonProgressBar(QProgressBar):
-    """Прогресс-бар с плавной анимацией заполнения.
+class NeonProgressBar(QWidget):
+    """Прогресс-бар с плавной анимацией заполнения и завершения.
+
+    Рисуется полностью вручную (без QSS): фон, неоновый градиент заливки
+    и центрированный текст. Заполнение анимируется (OutCubic, 400 мс).
+    При вызове :meth:`complete` значение доводится до 100%, заливка плавно
+    (через полупрозрачную розовую подложку) становится сплошного цвета
+    ``#FF4081``, а текст меняется на "ЗАВЕРШЕНО!".
 
     Пример использования::
 
         progress = NeonProgressBar()
         progress.animate_to(85)  # плавно заполнить до 85%
+        progress.complete()      # плавно завершить: розовый + "ЗАВЕРШЕНО!"
     """
+
+    # Палитра (согласована с основной темой)
+    _COLOR_FROM = QColor("#00E5FF")
+    _COLOR_TO = QColor("#FF4081")
+    _DONE_COLOR = QColor("#FF4081")
+    _BG_COLOR = QColor("#1A1A1A")
+    _BORDER_COLOR = QColor("#2A2A2A")
+    _TEXT_COLOR = QColor("#FFFFFF")
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimum(0)
-        self.setMaximum(100)
-        self.setValue(0)
-        self.setTextVisible(True)
+        self._value: float = 0.0
+        self._mix: float = 0.0  # 0..1: переход заливки к сплошному #FF4081
+        self._completed: bool = False
+        self._fill_anim: QVariantAnimation | None = None
+        self._mix_anim: QVariantAnimation | None = None
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumHeight(28)
+        self.setMinimumWidth(140)
+
+    # ------------------------------------------------------------------
+    # Публичный API
+    # ------------------------------------------------------------------
+
+    def value(self) -> int:
+        """Вернуть текущее значение (0-100)."""
+        return round(self._value)
+
+    def setValue(self, value: int) -> None:
+        """Установить значение без анимации."""
+        self._value = float(value)
+        self.update()
 
     def animate_to(self, value: int, duration: int = 400) -> None:
-        """Анимированно установить значение прогресса.
+        """Плавно заполнить прогресс до *value* (без режима завершения).
 
         Args:
             value: Целевое значение (0-100).
             duration: Длительность анимации в миллисекундах.
         """
-        anim = QPropertyAnimation(self, b"value", self)
-        anim.setEndValue(value)
-        anim.setDuration(duration)
-        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
-        anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._stop_anims()
+        self._completed = False
+        self._mix = 0.0
+        self._start_fill_anim(float(max(0, min(value, 100))), duration)
+
+    def complete(self, duration: int = 400) -> None:
+        """Плавно завершить: довести до 100% и сменить заливку на #FF4081.
+
+        Текст при этом меняется на "ЗАВЕРШЕНО!". Плавность достигается
+        параллельной анимацией ``_mix`` (0 -> 1).
+
+        Args:
+            duration: Длительность анимации в миллисекундах.
+        """
+        self._stop_anims()
+        self._completed = True
+        self._start_fill_anim(100.0, duration)
+
+        self._mix_anim = QVariantAnimation(self)
+        self._mix_anim.setStartValue(0.0)
+        self._mix_anim.setEndValue(1.0)
+        self._mix_anim.setDuration(duration)
+        self._mix_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self._mix_anim.valueChanged.connect(self._on_mix_changed)
+        self._mix_anim.finished.connect(self._on_mix_finished)
+        self._mix_anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def reset(self) -> None:
-        """Сбросить прогресс до нуля без анимации."""
-        self.setValue(0)
+        """Сбросить прогресс до нуля без анимации (и режим завершения)."""
+        self._stop_anims()
+        self._value = 0.0
+        self._mix = 0.0
+        self._completed = False
+        self.update()
+
+    # ------------------------------------------------------------------
+    # Внутренняя логика
+    # ------------------------------------------------------------------
+
+    def _start_fill_anim(self, target: float, duration: int) -> None:
+        anim = QVariantAnimation(self)
+        anim.setStartValue(self._value)
+        anim.setEndValue(target)
+        anim.setDuration(duration)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.valueChanged.connect(self._on_value_changed)
+        anim.finished.connect(self._on_fill_finished)
+        self._fill_anim = anim
+        anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def _on_value_changed(self, value: float) -> None:
+        self._value = float(value)
+        self.update()
+
+    def _on_mix_changed(self, mix: float) -> None:
+        self._mix = float(mix)
+        self.update()
+
+    def _on_fill_finished(self) -> None:
+        """Анимация заполнения завершилась - забыть ссылку.
+
+        С политикой ``DeleteWhenStopped`` C++-объект анимации удаляется
+        сразу после естественного завершения. Без сброса ссылки здесь
+        Python-атрибут указывал бы на удалeнный объект, и следующий вызов
+        ``_stop_anims`` падал с ``RuntimeError``.
+        """
+        self._fill_anim = None
+
+    def _on_mix_finished(self) -> None:
+        """Анимация морфа завершилась - забыть ссылку (см. ``_on_fill_finished``)."""
+        self._mix_anim = None
+
+    def _stop_anims(self) -> None:
+        self._stop_fill_anim()
+        self._stop_mix_anim()
+
+    def _stop_fill_anim(self) -> None:
+        if self._fill_anim is not None:
+            self._stop_animation_safe(self._fill_anim)
+            self._fill_anim = None
+
+    def _stop_mix_anim(self) -> None:
+        if self._mix_anim is not None:
+            self._stop_animation_safe(self._mix_anim)
+            self._mix_anim = None
+
+    @staticmethod
+    def _stop_animation_safe(anim: QVariantAnimation) -> None:
+        """Остановить анимацию, игнорируя уже удалeнные C++-объекты.
+
+        Защитный случай: если ``finished`` eщe не успел сбросить ссылку,
+        а C++-объект уже удалeн (``DeleteWhenStopped``), вызов ``stop()``
+        бросает ``RuntimeError`` - проглатываем его.
+        """
+        try:
+            anim.stop()
+        except RuntimeError:
+            pass
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        """Нарисовать фон, заливку и текст прогресс-бара."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        radius = 4.0
+
+        # Фон и рамка
+        painter.setPen(QPen(self._BORDER_COLOR))
+        painter.setBrush(self._BG_COLOR)
+        painter.drawRoundedRect(rect, radius, radius)
+
+        # Заливка
+        ratio = self._value / 100.0
+        if ratio > 0.0:
+            fill = QRectF(
+                rect.left(),
+                rect.top(),
+                max(rect.width() * ratio, 2.0),
+                rect.height(),
+            )
+            gradient = QLinearGradient(fill.left(), 0.0, fill.right(), 0.0)
+            gradient.setColorAt(0.0, self._COLOR_FROM)
+            gradient.setColorAt(1.0, self._COLOR_TO)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(gradient)
+            painter.drawRoundedRect(fill, radius, radius)
+
+            # Плавный переход к сплошному #FF4081 при завершении
+            if self._mix > 0.0:
+                overlay = QColor(self._DONE_COLOR)
+                overlay.setAlpha(int(255 * self._mix))
+                painter.setBrush(overlay)
+                painter.drawRoundedRect(fill, radius, radius)
+
+        # Текст
+        text = "ЗАВЕРШЕНО!" if self._completed else f"{round(self._value)}%"
+        painter.setPen(self._TEXT_COLOR)
+        painter.setFont(self.font())
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
 
 # ---------------------------------------------------------------------------

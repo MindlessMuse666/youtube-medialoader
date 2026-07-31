@@ -140,23 +140,6 @@ QComboBox QAbstractItemView::item:selected {
     color: #0A0A0A;
 }
 
-/* === Прогресс-бар === */
-QProgressBar {
-    background-color: #1A1A1A;
-    border: 1px solid #2A2A2A;
-    border-radius: 4px;
-    text-align: center;
-    color: #FFFFFF;
-    font-size: 12px;
-    min-height: 28px;
-}
-
-QProgressBar::chunk {
-    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 #00E5FF, stop:1 #FF4081);
-    border-radius: 3px;
-}
-
 /* === Область логов === */
 QTextEdit#logArea {
     background-color: #1A1A1A;
@@ -231,25 +214,28 @@ QGroupBox::title {
     font-weight: bold;
 }
 
-/* === Кнопка "Очистить логи" === */
-QPushButton#clearLogBtn {
+/* === Кнопки "ОЧИСТИТЬ ЛОГИ" / "ОЧИСТИТЬ ЗАВЕРШЁННЫЕ" === */
+QPushButton#clearLogBtn, QPushButton#queueClearBtn {
     background-color: transparent;
     border: none;
     color: #555555;
     font-size: 11px;
+    min-height: 30px;
+    padding: 4px 8px;
     text-decoration: underline;
 }
 
-QPushButton#clearLogBtn:hover {
+QPushButton#clearLogBtn:hover, QPushButton#queueClearBtn:hover {
     color: #FF4081;
 }
 
-/* === Кнопка "История" === */
+/* === Кнопка "ИСТОРИЯ" === */
 QPushButton#historyBtn {
     background-color: transparent;
     border: 1px solid #00FF88;
     border-radius: 4px;
-    padding: 4px 10px;
+    padding: 4px 12px;
+    min-height: 30px;
     color: #00FF88;
     font-size: 11px;
 }
