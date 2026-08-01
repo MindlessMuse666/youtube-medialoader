@@ -337,3 +337,190 @@ class TestPartialCleanup:
             )
 
         assert not part.exists()
+
+
+# ---------------------------------------------------------------------------
+# Cookie-фоллбек (повтор без кук при ошибке)
+# ---------------------------------------------------------------------------
+
+
+class TestCookieFallback:
+    """При ошибке запроса с куками попытка повторяется без них."""
+
+    @patch("yt_dlp.YoutubeDL")
+    def test_get_video_info_retries_without_cookies(
+        self, mock_ydl_cls: MagicMock, sample_info: dict
+    ) -> None:
+        """Первая попытка с куками падает -> повтор без опций кук."""
+        mock_ydl = MagicMock()
+        mock_ydl_cls.return_value.__enter__.return_value = mock_ydl
+        mock_ydl.extract_info.side_effect = [
+            DownloadError("Blocked by YouTube"),
+            sample_info,
+        ]
+
+        downloader = YouTubeDownloader(cookies_from_browser=("chrome",))
+        result = downloader.get_video_info("https://youtube.com/watch?v=test")
+
+        assert result["title"] == "Test Video"
+        first_opts = mock_ydl_cls.call_args_list[0][0][0]
+        second_opts = mock_ydl_cls.call_args_list[1][0][0]
+        assert "cookiesfrombrowser" in first_opts
+        assert "cookiesfrombrowser" not in second_opts
+
+    @patch("yt_dlp.YoutubeDL")
+    def test_get_video_info_raises_when_no_cookies(
+        self, mock_ydl_cls: MagicMock
+    ) -> None:
+        """Без кук ошибка пробрасывается сразу, без повторной попытки."""
+        mock_ydl = MagicMock()
+        mock_ydl_cls.return_value.__enter__.return_value = mock_ydl
+        mock_ydl.extract_info.side_effect = DownloadError("Blocked")
+
+        downloader = YouTubeDownloader()
+        with pytest.raises(DownloadError):
+            downloader.get_video_info("https://youtube.com/watch?v=test")
+
+        assert mock_ydl_cls.call_count == 1
+
+    @patch("yt_dlp.YoutubeDL")
+    def test_download_retries_without_cookies(
+        self, mock_ydl_cls: MagicMock
+    ) -> None:
+        """Загрузка с куками, упавшая, повторяется без них."""
+        mock_ydl = MagicMock()
+        mock_ydl_cls.return_value.__enter__.return_value = mock_ydl
+        mock_ydl.download.side_effect = [DownloadError("Blocked"), None]
+
+        downloader = YouTubeDownloader(cookies_from_browser=("chrome",))
+        downloader.download(
+            url="https://youtube.com/watch?v=test",
+            output_path="/tmp",
+            filename="video.mp4",
+        )
+
+        assert mock_ydl.download.call_count == 2
+        first_opts = mock_ydl_cls.call_args_list[0][0][0]
+        second_opts = mock_ydl_cls.call_args_list[1][0][0]
+        assert "cookiesfrombrowser" in first_opts
+        assert "cookiesfrombrowser" not in second_opts
+
+
+class TestResolveCookies:
+    """Приоритет явных аргументов над значениями конструктора."""
+
+    def test_explicit_args_override_constructor(self) -> None:
+        downloader = YouTubeDownloader(cookies_from_browser=("chrome",))
+        browsers, file = downloader._resolve_cookies(("firefox",), "/tmp/c.txt")
+        assert browsers == ("firefox",)
+        assert file == "/tmp/c.txt"
+
+    def test_none_args_fall_back_to_constructor(self) -> None:
+        downloader = YouTubeDownloader(
+            cookies_from_browser=("chrome",), cookies_file="/x.txt"
+        )
+        browsers, file = downloader._resolve_cookies(None, None)
+        assert browsers == ("chrome",)
+        assert file == "/x.txt"
+
+    def test_remove_cookie_opts(self) -> None:
+        opts = {"cookiesfrombrowser": ("chrome",), "cookiefile": "/c.txt", "quiet": True}
+        YouTubeDownloader._remove_cookie_opts(opts)
+        assert "cookiesfrombrowser" not in opts
+        assert "cookiefile" not in opts
+        assert opts["quiet"] is True
+
+
+# ---------------------------------------------------------------------------
+# YouTubeDownloader.get_playlist_info
+# ---------------------------------------------------------------------------
+
+
+class TestGetPlaylistInfo:
+    """Получение списка видео из плейлиста."""
+
+    @patch("yt_dlp.YoutubeDL")
+    def test_returns_cleaned_entries(self, mock_ydl_cls: MagicMock) -> None:
+        mock_ydl = MagicMock()
+        mock_ydl_cls.return_value.__enter__.return_value = mock_ydl
+        mock_ydl.extract_info.return_value = {
+            "entries": [
+                {
+                    "title": "V1",
+                    "url": "u1",
+                    "duration": 10,
+                    "thumbnail": "t1",
+                    "playlist_index": 1,
+                },
+                None,  # пропускается
+                {
+                    "title": "V2",
+                    "webpage_url": "u2",
+                    "duration": 20,
+                    "thumbnail": "t2",
+                    "playlist_index": 2,
+                },
+            ]
+        }
+
+        downloader = YouTubeDownloader()
+        result = downloader.get_playlist_info(
+            "https://youtube.com/playlist?list=PL123"
+        )
+
+        assert len(result) == 2
+        assert result[0]["title"] == "V1"
+        assert result[0]["url"] == "u1"
+        assert result[0]["index"] == 1
+        # url берётся из webpage_url, когда нет короткого url
+        assert result[1]["url"] == "u2"
+        assert result[1]["index"] == 2
+
+        opts = mock_ydl_cls.call_args[0][0]
+        assert opts.get("extract_flat") is True
+
+    @patch("yt_dlp.YoutubeDL")
+    def test_empty_playlist(self, mock_ydl_cls: MagicMock) -> None:
+        mock_ydl = MagicMock()
+        mock_ydl_cls.return_value.__enter__.return_value = mock_ydl
+        mock_ydl.extract_info.return_value = {}
+
+        downloader = YouTubeDownloader()
+        assert downloader.get_playlist_info("https://youtube.com/playlist?list=PL1") == []
+
+
+# ---------------------------------------------------------------------------
+# YouTubeDownloader._normalize_info
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeInfo:
+    """Нормализация информации о видео (filesize и fallback)."""
+
+    def test_filesize_from_requested_formats(self) -> None:
+        info = {
+            "title": "T",
+            "duration": 10,
+            "requested_formats": [
+                {"filesize": 1_000},
+                {"filesize": 2_000},
+            ],
+            "formats": [],
+        }
+        result = YouTubeDownloader._normalize_info(info)
+        assert result["filesize"] == 3_000
+
+    def test_filesize_fallback_to_max_format(self) -> None:
+        info = {
+            "requested_formats": [],
+            "formats": [
+                {"filesize": 500},
+                {"filesize_approx": 9_000},
+            ],
+        }
+        result = YouTubeDownloader._normalize_info(info)
+        assert result["filesize"] == 9_000
+
+    def test_filesize_none_when_no_sizes(self) -> None:
+        result = YouTubeDownloader._normalize_info({"formats": []})
+        assert result["filesize"] is None

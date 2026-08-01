@@ -8,7 +8,12 @@ from __future__ import annotations
 import threading
 from unittest.mock import MagicMock, patch
 
-from src.gui.worker import DownloadWorker, VideoInfoWorker
+from src.gui.worker import (
+    _BaseWorker,
+    DownloadWorker,
+    PlaylistWorker,
+    VideoInfoWorker,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -205,3 +210,83 @@ class TestDownloadWorker:
 
         assert len(progress_data) > 0
         assert progress_data[0]["status"] == "downloading"
+
+
+# ---------------------------------------------------------------------------
+# PlaylistWorker
+# ---------------------------------------------------------------------------
+
+
+class TestPlaylistWorker:
+    """Тесты для :class:`PlaylistWorker`."""
+
+    def test_playlist_fetched_on_success(self) -> None:
+        """При успешном получении списка срабатывает playlist_fetched."""
+        worker = PlaylistWorker("https://youtube.com/playlist?list=PL123")
+        entries = [
+            {"title": "V1", "url": "u1", "duration": 10, "thumbnail": "", "index": 1},
+            {"title": "V2", "url": "u2", "duration": 20, "thumbnail": "", "index": 2},
+        ]
+        mock_dl = MagicMock()
+        mock_dl.get_playlist_info.return_value = entries
+        worker._downloader = mock_dl
+
+        result: list[list[dict]] = []
+        worker.playlist_fetched.connect(result.append)  # type: ignore[arg-type]
+        worker.run()
+
+        assert result == [entries]
+
+    def test_playlist_error(self) -> None:
+        """При ошибке получения списка срабатывает error_occurred."""
+        worker = PlaylistWorker("https://youtube.com/playlist?list=PL123")
+        mock_dl = MagicMock()
+        mock_dl.get_playlist_info.side_effect = RuntimeError("Playlist failed")
+        worker._downloader = mock_dl
+
+        errors: list[str] = []
+        worker.error_occurred.connect(errors.append)  # type: ignore[arg-type]
+        worker.run()
+
+        assert len(errors) == 1
+        assert "Playlist failed" in errors[0]
+
+
+# ---------------------------------------------------------------------------
+# _BaseWorker (Template Method)
+# ---------------------------------------------------------------------------
+
+
+class _SilentWorker(_BaseWorker):
+    """Тестовый worker, подавляющий ошибки по флагу (как отмена загрузки)."""
+
+    def __init__(self, suppress: bool = False) -> None:
+        super().__init__()
+        self._suppress = suppress
+
+    def _perform(self) -> None:
+        raise RuntimeError("boom")
+
+    def _should_report_error(self) -> bool:
+        return not self._suppress
+
+
+class TestBaseWorker:
+    """Шаблонный метод run(): отчёт об ошибке по _should_report_error."""
+
+    def test_error_reported_by_default(self) -> None:
+        worker = _SilentWorker()
+        errors: list[str] = []
+        worker.error_occurred.connect(errors.append)  # type: ignore[arg-type]
+        worker.run()
+
+        assert len(errors) == 1
+        assert "boom" in errors[0]
+
+    def test_error_suppressed_when_not_report(self) -> None:
+        worker = _SilentWorker(suppress=True)
+        errors: list[str] = []
+        worker.error_occurred.connect(errors.append)  # type: ignore[arg-type]
+        worker.run()
+
+        assert errors == []

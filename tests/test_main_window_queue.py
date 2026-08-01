@@ -571,3 +571,23 @@ class TestDownloadButtonHiddenAfterSuccess:
         assert main_window._last_download_succeeded is False
         main_window._update_download_btn()
         assert not main_window.download_btn.isHidden()
+
+
+class TestLastDownloadPathDefault:
+    """Фикс (баг 2): _last_download_path инициализируется в __init__.
+
+    Раньше поле появлялось только после первой загрузки, и клик по
+    "ОТКРЫТЬ ПАПКУ" до неё падал с AttributeError.
+    """
+
+    def test_default_empty(self, main_window: MainWindow) -> None:
+        """До первой загрузки поле существует и пустое."""
+        assert main_window._last_download_path == ""
+
+    def test_open_folder_before_download_is_noop(
+        self, main_window: MainWindow
+    ) -> None:
+        """Клик по "ОТКРЫТЬ ПАПКУ" без загрузок не падает и ничего не открывает."""
+        with patch("src.gui.main_window.reveal_in_file_manager") as mock_reveal:
+            main_window._on_open_folder_clicked()
+        mock_reveal.assert_not_called()
