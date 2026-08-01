@@ -115,7 +115,7 @@ py -m src.main
 pip install pyinstaller
 
 # 3. собери бинарь командой
-.\.venv\Scripts\pyinstaller --noconfirm --clean --onefile --windowed --name "YouTube Medialoader" --icon "assets\icons\app_icon.ico" --add-data "assets;assets" --collect-all "yt_dlp" --optimize 2 --exclude-module tkinter --exclude-module unittest --exclude-module pydoc --hidden-import "src.gui" --hidden-import "src.utils" --hidden-import "src.gui.animated_background" --hidden-import "src.gui.styles" --hidden-import "src.gui.widgets" --hidden-import "src.gui.worker" --hidden-import "src.gui.download_queue" --hidden-import "src.gui.playlist_dialog" --hidden-import "src.gui.history_dialog" --hidden-import "src.utils.file_utils" --hidden-import "src.utils.logger" --hidden-import "src.utils.history" --hidden-import "src.utils.update_checker" "src\main.py"
+.\.venv\Scripts\pyinstaller --noconfirm --clean --onefile --windowed --name "YouTube Medialoader" --icon "assets\icons\app_icon.ico" --add-data "assets;assets" --collect-all "yt_dlp" --optimize 2 --exclude-module tkinter --exclude-module unittest --exclude-module pydoc --hidden-import "src.gui" --hidden-import "src.utils" --hidden-import "src.gui.animated_background" --hidden-import "src.gui.styles" --hidden-import "src.gui.widgets" --hidden-import "src.gui.worker" --hidden-import "src.gui.download_queue" --hidden-import "src.gui.playlist_dialog" --hidden-import "src.gui.history_dialog" --hidden-import "src.utils.constants" --hidden-import "src.utils.theme" --hidden-import "src.utils.file_utils" --hidden-import "src.utils.formatters" --hidden-import "src.utils.url_utils" --hidden-import "src.utils.logger" --hidden-import "src.utils.history" --hidden-import "src.utils.update_checker" "src\main.py"
 ```
 
 > Готовый `.exe` появится в папке `dist/`.
@@ -141,7 +141,11 @@ youtube-medialoader/
 │   │   ├── playlist_dialog.py    # Диалог выбора видео из плейлиста
 │   │   └── history_dialog.py     # Диалог истории загрузок
 │   └── utils/
+│       ├── constants.py          # Общие константы (имя, версия, GitHub-репо)
+│       ├── theme.py              # Палитра темы (единый источник цветов)
 │       ├── file_utils.py         # Очистка имен файлов, пути
+│       ├── formatters.py         # Форматирование длительности, размера, скорости, ETA
+│       ├── url_utils.py          # Валидация URL, определение плейлистов
 │       ├── logger.py             # Qt-логгер с сигналами
 │       ├── history.py            # Менеджер истории (QSettings + JSON)
 │       └── update_checker.py     # Проверка обновлений на GitHub
@@ -152,14 +156,19 @@ youtube-medialoader/
 │   ├── test_downloader.py        # Тесты загрузчика (моки yt-dlp)
 │   ├── test_download_queue.py    # Тесты очереди загрузок
 │   ├── test_file_utils.py        # Тесты утилит
+│   ├── test_formatters.py        # Тесты форматтеров (длительность, размер, скорость)
 │   ├── test_history_dialog.py    # Тесты диалога истории
+│   ├── test_history_manager.py   # Тесты менеджера истории (QSettings + JSON)
+│   ├── test_integration.py       # Opt-in сетевые тесты (YML_INTEGRATION=1)
 │   ├── test_main_window_queue.py # Тесты очереди и потоков главного окна
+│   ├── test_playlist_dialog.py   # Тесты диалога выбора видео из плейлиста
+│   ├── test_update_checker.py    # Тесты проверки обновлений
+│   ├── test_url_utils.py         # Тесты валидации URL и определения плейлистов
 │   ├── test_worker.py            # Тесты worker-ов
-│   ├── test_widgets.py           # Тесты неоновых виджетов
+│   ├── test_widgets.py           # Тесты виджетов
 │   └── conftest.py               # Фикстуры pytest
-├── pyproject.toml                # Метаданные и конфигурация
+├── pyproject.toml                # Мета и конфиг
 ├── requirements.txt              # Зависимости
-├── BUILD.md                      # Гайд по сборке EXE
 └── README.md                     # Этот файл
 ```
 
@@ -174,12 +183,24 @@ youtube-medialoader/
 
 ### Тестирование
 
-Проект покрыт модульными тестами с моками.
+Проект покрыт модульными тестами с моками (без сети).
 
-Тесты охватывают движок загрузки (форматы, куки, имена файлов), очередь загрузок, жизненный цикл потоков главного окна, историю и неоновые виджеты:
+Тесты охватывают движок загрузки (форматы, куки, имена файлов, cookie-фоллбек), очередь загрузок, жизненный цикл потоков главного окна, валидацию URL, форматтеры, проверку обновлений, менеджер истории, диалог плейлиста и неоновые виджеты:
 
 ```bash
 pytest tests/ -v --tb=short
+```
+
+### Интеграционные тесты (opt-in)
+
+Для реальной проверки метаданных с YouTube доступен сетевой тест. По умолчанию он пропускается; включить его можно переменной окружения `YML_INTEGRATION=1`:
+
+```powershell
+# включить и запустить
+$env:YML_INTEGRATION = "1"; pytest tests/test_integration.py -v
+
+# сбросить после проверки
+Remove-Item Env:YML_INTEGRATION
 ```
 
 ---
