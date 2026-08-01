@@ -7,15 +7,18 @@
 
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
 
 # Добавляем корень проекта в путь поиска модулей
 _project_root = Path(__file__).resolve().parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
+
+from src.gui.main_window import MainWindow  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -27,3 +30,27 @@ def qapp() -> QApplication:
     """
     app = QApplication.instance() or QApplication([])
     return app
+
+
+@pytest.fixture
+def main_window(qapp) -> MainWindow:
+    """MainWindow с изолированными настройками и без побочных эффектов.
+
+    Патчи сохраняются на время теста: QSettings возвращает пустые настройки,
+    трей и анимированный фон отключены, тосты заглушены, история - мок.
+    """
+    with (
+        patch("src.gui.main_window.QSettings") as mock_settings,
+        patch.object(QSystemTrayIcon, "isSystemTrayAvailable", return_value=False),
+        patch("src.gui.main_window.AnimatedBackground"),
+        patch.object(MainWindow, "show_toast"),
+    ):
+        settings = MagicMock()
+        settings.value.return_value = None
+        mock_settings.return_value = settings
+
+        window = MainWindow()
+        window._history_manager = MagicMock()  # не пишем в реальный файл истории
+        yield window
+        window.deleteLater()
+        qapp.processEvents()

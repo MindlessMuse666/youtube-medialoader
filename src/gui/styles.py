@@ -262,11 +262,12 @@ QScrollArea {
 }
 
 /* === Статус прогресса (скорость, ETA) === */
+/* Горизонтальное центрирование задаётся в коде (setAlignment) - значение
+   enum в qproperty с кавычками не применялось бы. */
 QLabel#progressStatus {
     color: #AAAAAA;
     font-size: 11px;
     padding: 0px;
     margin: 0px;
-    qproperty-alignment: 'AlignCenter';
 }
 """

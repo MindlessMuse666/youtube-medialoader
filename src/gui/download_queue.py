@@ -63,6 +63,24 @@ class QueueItem:
     title: str = ""
 
 
+def _format_details(format_type: str, quality: str) -> str:
+    """Строка деталей формата и качества для записи в очереди.
+
+    Качество показывается только для видео: для MP3 расширения достаточно,
+    а ``| 720p`` (или иное качество) для аудио не имеет смысла.
+
+    Args:
+        format_type: ``"mp4"`` или ``"mp3"``.
+        quality: ``"1080p"``, ``"720p"`` или ``"480p"``.
+
+    Returns:
+        Строка вида ``"MP4 | 720p"`` или ``"MP3"``.
+    """
+    if format_type.lower() == "mp3":
+        return "MP3"
+    return f"{format_type.upper()} | {quality}"
+
+
 class _QueueItemWidget(QWidget):
     """Виджет одного элемента очереди."""
 
@@ -122,7 +140,7 @@ class _QueueItemWidget(QWidget):
         title_label.setStyleSheet("color: #FFFFFF; font-size: 12px;")
         info_layout.addWidget(title_label)
 
-        details = f"{self.item.format_type.upper()} | {self.item.quality}"
+        details = _format_details(self.item.format_type, self.item.quality)
         detail_label = QLabel(details)
         detail_label.setStyleSheet("color: #888888; font-size: 10px;")
         info_layout.addWidget(detail_label)
@@ -143,7 +161,7 @@ class DownloadQueueWidget(QGroupBox):
     Отображает список добавленных в очередь элементов и их статус.
     Заголовок группы показывает текущее количество элементов; благодаря
     наследованию от :class:`QGroupBox` внешний вид и внутренние отступы
-    совпадают с остальными блоками окна («Информация», «Логи», …).
+    совпадают с остальными блоками окна ("Информация", "Логи", …).
 
     Высота списка подстраивается под содержимое: пока элементов мало -
     область компактна и показывает их без прокрутки; с ростом очереди она
@@ -177,7 +195,7 @@ class DownloadQueueWidget(QGroupBox):
         self.setVisible(False)
 
     def _setup_ui(self) -> None:
-        # Отступы самого блока держим умеренными - «воздух» вокруг записей
+        # Отступы самого блока держим умеренными - "воздух" вокруг записей
         # очереди обеспечивают внутренние отступы _QueueItemWidget, а не
         # рамка группы (см. _QueueItemWidget._setup_ui).
         layout = QVBoxLayout(self)
@@ -199,6 +217,11 @@ class DownloadQueueWidget(QGroupBox):
         self._list_layout = QVBoxLayout(self._list_widget)
         self._list_layout.setSpacing(4)
         self._list_layout.setContentsMargins(0, 0, 0, 0)
+        # Два упора (сверху и снизу): пока строк меньше доступной высоты,
+        # блок строк центрируется по вертикали, оставаясь прижатым к левому
+        # краю. Когда очередь перерастает область, упоры схлопываются в ноль
+        # и строки прокручиваются от верха как обычно.
+        self._list_layout.addStretch()
         self._list_layout.addStretch()
         self._scroll.setWidget(self._list_widget)
 
@@ -209,7 +232,7 @@ class DownloadQueueWidget(QGroupBox):
         btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.addStretch()
         clear_btn = QPushButton("ОЧИСТИТЬ ЗАВЕРШЕННЫЕ")
-        # Стиль общий с кнопкой «ОЧИСТИТЬ ЛОГИ» (см. QSS #queueClearBtn)
+        # Стиль общий с кнопкой "ОЧИСТИТЬ ЛОГИ" (см. QSS #queueClearBtn)
         clear_btn.setObjectName("queueClearBtn")
         clear_btn.clicked.connect(self._clear_completed)
         btn_row.addWidget(clear_btn)
@@ -323,16 +346,17 @@ class DownloadQueueWidget(QGroupBox):
 
     def _rebuild_list(self) -> None:
         """Перестроить список виджетов и обновить заголовок группы."""
-        # Очищаем layout (оставляем stretch)
-        while self._list_layout.count() > 1:
-            child = self._list_layout.takeAt(0)
+        # Очищаем layout, сохраняя два упора для вертикального центрирования
+        # (индекс 0 и последний; строки всегда идут между ними).
+        while self._list_layout.count() > 2:
+            child = self._list_layout.takeAt(1)
             if child and child.widget():
                 child.widget().deleteLater()
 
-        # Вставляем новые виджеты
+        # Вставляем новые виджеты между упорами
         for i, item in enumerate(self._items):
             widget = _QueueItemWidget(item, i)
-            self._list_layout.insertWidget(i, widget)
+            self._list_layout.insertWidget(i + 1, widget)
 
         # Обновляем заголовок группы с количеством элементов
         self.setTitle(f"ОЧЕРЕДЬ: {len(self._items)}")

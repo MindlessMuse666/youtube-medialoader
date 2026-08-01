@@ -5,6 +5,8 @@
 """
 
 import os
+import re
+import shutil
 import threading
 from typing import Any, Callable, Optional
 
@@ -255,6 +257,9 @@ class YouTubeDownloader:
                 ydl.download([url])
         except DownloadError:
             if self._cancel_event and self._cancel_event.is_set():
+                # yt-dlp оставляет .part-файлы для возобновления (resume);
+                # при явной отмене пользователем они не нужны.
+                self._cleanup_partial_files(outtmpl)
                 raise
 
             # Если использовали куки - пробуем без них
@@ -294,6 +299,59 @@ class YouTubeDownloader:
         if format_type == "mp3":
             return base
         return f"{base}.mp4"
+
+    @staticmethod
+    def _cleanup_partial_files(outtmpl: str) -> None:
+        """Удалить временные файлы yt-dlp, оставшиеся после отмены.
+
+        При прерывании загрузки yt-dlp **не** удаляет частично скачанные
+        файлы - они нужны ему для возобновления (resume). После явной отмены
+        пользователем такие файлы не нужны, поэтому удаляем всё, что yt-dlp
+        мог оставить для шаблона *outtmpl*:
+
+          - ``<имя>.part`` — файл или каталог фрагментов;
+          - ``<имя>.f<id>.<ext>`` — промежуточные файлы слияния форматов;
+          - ``<имя>.ytdl`` — файл состояния возобновляемой загрузки.
+
+        Готовый файл (``<имя>.mp4``/``<имя>.mp3``) при этом не затрагивается:
+        для ``mp3`` шаблон задаётся без расширения, поэтому ``<имя>.mp3`` от
+        прошлой успешной загрузки останется на месте.
+
+        Args:
+            outtmpl: Шаблон пути вывода, переданный yt-dlp в ``outtmpl``.
+        """
+        directory = os.path.dirname(outtmpl) or "."
+        base = os.path.basename(outtmpl)
+        if not base:
+            return
+
+        # Промежуточные файлы слияния: "<имя>.f<числовой id>.<ext>"
+        intermediate_re = re.compile(
+            rf"^{re.escape(base)}\.f\d+(?:\.[a-zA-Z0-9]+)?$"
+        )
+
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    name = entry.name
+                    if not name.startswith(base + "."):
+                        continue
+                    is_temp = (
+                        name.endswith(".part")
+                        or name.endswith(".ytdl")
+                        or intermediate_re.match(name) is not None
+                    )
+                    if not is_temp:
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        shutil.rmtree(entry.path, ignore_errors=True)
+                    else:
+                        try:
+                            os.remove(entry.path)
+                        except OSError:
+                            pass
+        except OSError:
+            pass
 
     @staticmethod
     def _extract(url: str, opts: Any) -> Any:

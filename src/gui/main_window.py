@@ -92,6 +92,12 @@ _EMOJI_RE = re.compile(
     "]+"
 )
 
+# Максимальная высота QWidget по умолчанию (QWIDGETSIZE_MAX). Используется,
+# чтобы после анимации раскрытия панели управления снять потолок
+# maximumHeight: тогда панель может естественно расти при появлении строки
+# статуса загрузки под прогресс-баром, не обрезая её.
+_UNBOUNDED_HEIGHT = 16_777_215
+
 
 class MainWindow(QMainWindow):
     """Главное окно приложения.
@@ -113,10 +119,26 @@ class MainWindow(QMainWindow):
         # Флаг: пользователь вводил имя файла вручную?
         self._is_custom_filename = False
 
-        # Последнее полученное название видео (для дефолтного имени файла).
-        # Эти два атрибута должны существовать ДО _load_settings(): смена
-        # формата при восстановлении настроек вызывает _on_type_changed.
+        # Флаг: последняя загрузка завершилась успешно. Пока входные параметры
+        # (ссылка / тип / качество) не изменились, повторно скачивать то же
+        # самое незачем - кнопка "СКАЧАТЬ" после завершения остаётся скрытой.
+        self._last_download_succeeded = False
+
+        # Последнее полученное название видео (для дефолтного имени файла) и
+        # URL, для которого оно получено. Эти атрибуты должны существовать ДО
+        # _load_settings(): смена формата при восстановлении настроек вызывает
+        # _on_type_changed.
         self._current_video_title: str = ""
+        self._current_video_url: str = ""
+
+        # Состояние потоков предпросмотра и загрузки. Инициализируется раньше
+        # _load_settings(): восстановление настроек срабатывает на обработчики
+        # смены типа/качества, а те читают эти поля (см. _can_enable_download).
+        self._info_thread: QThread | None = None
+        self._info_worker: VideoInfoWorker | None = None
+        self._download_thread: QThread | None = None
+        self._download_worker: DownloadWorker | None = None
+        self._current_queue_item: QueueItem | None = None
 
         # Загружаем шрифты один раз при старте
         load_fonts()
@@ -166,17 +188,6 @@ class MainWindow(QMainWindow):
         self._fetch_timer.setSingleShot(True)
         self._fetch_timer.setInterval(500)
         self._fetch_timer.timeout.connect(self._on_fetch_timer_timeout)
-
-        # Ссылка на текущий поток и worker предпросмотра
-        self._info_thread: QThread | None = None
-        self._info_worker: VideoInfoWorker | None = None
-
-        # Ссылка на текущий поток и worker загрузки
-        self._download_thread: QThread | None = None
-        self._download_worker: DownloadWorker | None = None
-
-        # Текущий элемент очереди (если загрузка из очереди)
-        self._current_queue_item: QueueItem | None = None
 
         # Счeтчик для игнорирования устаревших результатов
         self._fetch_seq: int = 0
@@ -322,8 +333,8 @@ class MainWindow(QMainWindow):
     def _on_tray_message_clicked(self) -> None:
         """Открыть скачанный файл по клику на системное уведомление.
 
-        Показывает файл в Explorer с выделением (как кнопка «Открыть
-        папку»). Если файл уже удалeн - открывает содержащую папку.
+        Показывает файл в Explorer с выделением (как кнопка "Открыть
+        папку"). Если файл уже удалeн - открывает содержащую папку.
         """
         path = self._notify_path
         if not path:
@@ -506,6 +517,7 @@ class MainWindow(QMainWindow):
         self.quality_combo = QComboBox()
         self.quality_combo.addItems(["1080p", "720p", "480p"])
         self.quality_combo.setCurrentIndex(1)  # 720p по умолчанию
+        self.quality_combo.currentIndexChanged.connect(self._on_quality_changed)
         self._fix_combo_font(self.quality_combo)
         quality_layout.addWidget(self.quality_combo, 1)
         row.addLayout(quality_layout)
@@ -643,6 +655,10 @@ class MainWindow(QMainWindow):
         # Статус загрузки (скорость, ETA, размер)
         self._progress_status_label = QLabel("")
         self._progress_status_label.setObjectName("progressStatus")
+        self._progress_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Пустая метка скрыта: иначе она резервирует строку между прогресс-баром
+        # и кнопками, и кнопки съезжают вниз ещё до начала загрузки.
+        self._progress_status_label.setVisible(False)
         controls_layout.addWidget(self._progress_status_label)
 
         # Кнопки
@@ -672,6 +688,16 @@ class MainWindow(QMainWindow):
         # Скрываем по умолчанию (схлопнуто)
         self._controls_container.setMaximumHeight(0)
         self._controls_container.setVisible(False)
+
+    def _set_progress_status(self, text: str) -> None:
+        """Показать строку статуса загрузки под прогресс-баром.
+
+        Пустая строка скрывает метку: тогда она не занимает места в раскладке,
+        и кнопки остаются прижатыми к прогресс-бару. Непустая - показывает
+        метку, чтобы информация о скорости/ETA/размере появлялась на месте.
+        """
+        self._progress_status_label.setText(text)
+        self._progress_status_label.setVisible(bool(text))
 
     def _build_download_queue(self, parent: QVBoxLayout) -> None:
         """Виджет очереди загрузок (скрыт, пока нет элементов)."""
@@ -826,6 +852,10 @@ class MainWindow(QMainWindow):
         Args:
             text: Текущее содержимое поля ввода ссылки.
         """
+        # Ссылка - входной параметр загрузки: любое её изменение сбрасывает
+        # флаг "уже скачано", и кнопка "СКАЧАТЬ" снова становится доступной.
+        self._last_download_succeeded = False
+
         has_text = bool(text.strip())
 
         # Раскрыть/схлопнуть панель управления
@@ -843,8 +873,8 @@ class MainWindow(QMainWindow):
             and hasattr(self, "progress_bar")
         ):
             self.progress_bar.reset()
-            self._progress_status_label.setText("")
-            # Результат старой загрузки сброшен - кнопка «Открыть папку»
+            self._set_progress_status("")
+            # Результат старой загрузки сброшен - кнопка "Открыть папку"
             # к прежнему файлу больше не нужна.
             self.open_folder_btn.setVisible(False)
 
@@ -853,7 +883,21 @@ class MainWindow(QMainWindow):
             self._cancel_pending_fetch()
             self._hide_info_preview()
             self._current_video_title = ""
+            self._current_video_url = ""
+            self._update_download_btn()
             return
+
+        # Сменился URL, для которого ещё не получена информация: скрываем
+        # старый блок "ИНФОРМАЦИЯ" и сбрасываем автоподставленное имя файла.
+        # Иначе при быстрой загрузке (пока yt-dlp не ответил) для нового
+        # видео подхватится название предыдущего. Кнопка "СКАЧАТЬ" скрыта,
+        # пока блок информации для текущей ссылки не появится.
+        if text.strip() != self._current_video_url:
+            self._hide_info_preview()
+            if not self._is_custom_filename:
+                self._current_video_title = ""
+                self.filename_input.setText("")
+            self._update_download_btn()
 
         # Перезапустить таймер дебаунса 500 мс
         self._fetch_timer.start()
@@ -875,6 +919,22 @@ class MainWindow(QMainWindow):
             self.quality_combo.setVisible(not is_audio)
         if hasattr(self, "_quality_label"):
             self._quality_label.setVisible(not is_audio)
+
+        # Тип - входной параметр загрузки: после его смены кнопку "СКАЧАТЬ"
+        # снова показываем, даже если предыдущая загрузка завершилась.
+        self._last_download_succeeded = False
+        if hasattr(self, "download_btn"):
+            self._update_download_btn()
+
+    def _on_quality_changed(self) -> None:
+        """Сбросить флаг "уже скачано" при смене качества видео.
+
+        Качество - такой же входной параметр загрузки, как ссылка и тип:
+        после его смены кнопка "СКАЧАТЬ" снова становится доступной.
+        """
+        self._last_download_succeeded = False
+        if hasattr(self, "download_btn"):
+            self._update_download_btn()
 
     # ------------------------------------------------------------------
     # Асинхронный предпросмотр (Этап 3)
@@ -1079,11 +1139,16 @@ class MainWindow(QMainWindow):
             self._complete_fetch()
             return
 
+        # URL, для которого получена информация: отличаем новую ссылку от уже
+        # обработанной (см. _on_url_changed).
+        worker_url = self._info_worker._url if self._info_worker is not None else ""
+
         title: str = info.get("title", "Untitled")
         duration_secs: int = info.get("duration", 0)
         filesize: int | None = info.get("filesize")
 
         self._current_video_title = title
+        self._current_video_url = worker_url
 
         # Форматируем данные для отображения
         duration_str = self._format_duration(duration_secs)
@@ -1094,6 +1159,7 @@ class MainWindow(QMainWindow):
         self.video_duration_label.setText(f"Длительность: {duration_str}")
         self.video_size_label.setText(f"Размер: {size_str}")
         self._show_info_preview()
+        self._update_download_btn()
 
         # Загружаем миниатюру
         thumbnail_url: str = info.get("thumbnail", "")
@@ -1125,6 +1191,7 @@ class MainWindow(QMainWindow):
             Toast.ERROR,
         )
         self._complete_fetch()
+        self._update_download_btn()
 
     def _on_playlist_fetched(self, entries: list[dict]) -> None:
         """Обработать успешное получение списка видео из плейлиста.
@@ -1445,14 +1512,24 @@ class MainWindow(QMainWindow):
         anim.setEndValue(target)
         anim.setDuration(300)
         anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        # После раскрытия снимаем жёсткий потолок высоты: во время загрузки
+        # под прогресс-баром появляется строка статуса, и если оставить
+        # maximumHeight равным высоте анимации, контейнер обрежет её.
+        anim.finished.connect(
+            lambda: self._controls_container.setMaximumHeight(_UNBOUNDED_HEIGHT)
+        )
         anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
         self._controls_expanded = True
 
     def _collapse_controls(self) -> None:
         """Плавно схлопнуть панель управления."""
+        # Стартуем с текущей отрисованной высоты: после раскрытия потолок
+        # снят (см. _do_expand), и без явного старта анимация шла бы
+        # от _UNBOUNDED_HEIGHT с мeртвой зоной в начале.
         anim = QPropertyAnimation(
             self._controls_container, b"maximumHeight", self
         )
+        anim.setStartValue(self._controls_container.height())
         anim.setEndValue(0)
         anim.setDuration(200)
         anim.setEasingCurve(QEasingCurve.Type.InCubic)
@@ -1482,9 +1559,37 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_queue_changed(self) -> None:
-        """Обработать изменение очереди (показать/скрыть виджет)."""
-        if self._queue_widget.is_empty:
-            pass  # очередь сама скрывается
+        """Обработать изменение очереди: обновить кнопку "СКАЧАТЬ"."""
+        self._update_download_btn()
+
+    def _has_current_info(self) -> bool:
+        """Получена ли информация для текущей ссылки в поле ввода.
+
+        Кнопка "СКАЧАТЬ" скрыта, пока блок "ИНФОРМАЦИЯ" не заполнен: без
+        информации мы не знаем имя выходного файла, и быстрая загрузка
+        новой ссылки сохранила бы файл как ``untitled``.
+        """
+        current_url = self.url_input.text().strip()
+        return bool(self._current_video_title) and current_url == self._current_video_url
+
+    def _can_enable_download(self) -> bool:
+        """Готово ли окно к запуску загрузки.
+
+        Кнопка "СКАЧАТЬ" видна только когда: информация получена для текущей
+        ссылки, ничего не скачивается, очередь пуста и входные параметры
+        изменились после последней успешной загрузки.
+        """
+        if self._download_thread is not None:
+            return False
+        if not self._queue_widget.is_empty:
+            return False
+        if self._last_download_succeeded:
+            return False
+        return self._has_current_info()
+
+    def _update_download_btn(self) -> None:
+        """Показать или скрыть кнопку "СКАЧАТЬ" по готовности к загрузке."""
+        self.download_btn.setVisible(self._can_enable_download())
 
     def _on_download_clicked(self) -> None:
         """Добавить видео в очередь загрузки.
@@ -1493,6 +1598,13 @@ class MainWindow(QMainWindow):
         в очередь. Если в данный момент ничего не скачивается,
         запускает обработку очереди.
         """
+        # Кнопка "СКАЧАТЬ" скрыта до получения информации, но шорткат Enter
+        # вызывает этот метод напрямую - поэтому проверяем готовность здесь.
+        # Аналогично не запускаем повторную загрузку без изменения входных
+        # параметров после успешного скачивания.
+        if not self._has_current_info() or self._last_download_succeeded:
+            return
+
         url = self.url_input.text().strip()
         if not url:
             self.show_toast("Введите ссылку на видео", Toast.WARNING)
@@ -1528,7 +1640,6 @@ class MainWindow(QMainWindow):
 
         # Добавляем в очередь
         self._queue_widget.add_item(item)
-        self._last_download_path = os.path.join(output_path, safe_name)
 
         self.log_message(
             f"📋 Добавлено в очередь: {item.title[:50]}",
@@ -1554,7 +1665,7 @@ class MainWindow(QMainWindow):
         item = self._queue_widget.next_pending()
         if item is None:
             # Очередь пуста - разблокируем UI
-            self.download_btn.setVisible(True)
+            self._update_download_btn()
             self.cancel_btn.setVisible(False)
             self.type_combo.setEnabled(True)
             self.quality_combo.setEnabled(True)
@@ -1573,15 +1684,12 @@ class MainWindow(QMainWindow):
         self.type_combo.setEnabled(False)
         self.quality_combo.setEnabled(False)
         self.progress_bar.reset()
-        self._progress_status_label.setText("")
+        self._set_progress_status("")
 
         self.log_message(
             f"⏳ [{item.title[:40]}]: начинаем загрузку...",
             "#00E5FF",
         )
-
-        # Сохраняем полный путь для кнопки "Открыть папку"
-        self._last_download_path = os.path.join(item.output_path, item.filename)
 
         # Создаeм поток и worker
         thread = QThread(self)
@@ -1629,12 +1737,12 @@ class MainWindow(QMainWindow):
             return
 
         self.cancel_btn.setVisible(False)
-        self.download_btn.setVisible(True)
+        self._update_download_btn()
         self.open_folder_btn.setVisible(False)
         self.type_combo.setEnabled(True)
         self.quality_combo.setEnabled(True)
         self.progress_bar.reset()
-        self._progress_status_label.setText("")
+        self._set_progress_status("")
 
         # Отмечаем элемент очереди как отменённый
         item = self._current_queue_item
@@ -1718,7 +1826,7 @@ class MainWindow(QMainWindow):
             if eta_str:
                 parts.append(f"осталось {eta_str}")
 
-            self._progress_status_label.setText("  |  ".join(parts))
+            self._set_progress_status("  |  ".join(parts))
 
         elif status == "finished":
             self.progress_bar.animate_to(100)
@@ -1734,10 +1842,14 @@ class MainWindow(QMainWindow):
         if self.sender() is not self._download_worker:
             return
 
+        # Успешное завершение: повторно скачивать те же входные параметры
+        # незачем - кнопка "СКАЧАТЬ" остаётся скрытой до их изменения.
+        self._last_download_succeeded = True
+
         self.progress_bar.complete()
         self.cancel_btn.setVisible(False)
         self.open_folder_btn.setVisible(True)
-        self._progress_status_label.setText("")
+        self._set_progress_status("")
 
         # Захватываем ссылки до их обнуления: завершившийся поток будет
         # прибран _cleanup_download(thread, worker), когда его finished-сигнал
@@ -1754,10 +1866,19 @@ class MainWindow(QMainWindow):
             self.log_message(f"✅ [{title[:40]}]: загрузка завершена!", "#00FF88")
             self.show_toast(f"Загрузка завершена: {title[:30]}", Toast.SUCCESS)
 
+            # Полный путь к завершённому файлу считаем из самого элемента
+            # очереди. Глобальный `_last_download_path` к этому моменту мог
+            # быть перезаписан новым "СКАЧАТЬ" или стартом следующего элемента
+            # очереди - тогда уведомление и кнопка "Открыть папку" вели бы на
+            # чужой файл. Путь из элемента совпадает с файлом на диске, т.к.
+            # outtmpl строится из item.filename.
+            completed_path = os.path.join(item.output_path, item.filename)
+            self._last_download_path = completed_path
+            self._notify_path = completed_path
+
             # Уведомление в системный трей. Запоминаем путь к файлу, чтобы
             # клик по уведомлению открыл именно его (см. _on_tray_message_clicked).
             if self._tray_icon is not None:
-                self._notify_path = self._last_download_path
                 self._tray_icon.showMessage(
                     "YouTube Medialoader",
                     f"Загрузка завершена: {title[:50]}",
@@ -1767,14 +1888,14 @@ class MainWindow(QMainWindow):
 
             # Записываем в историю
             file_size = 0
-            if self._last_download_path and os.path.isfile(self._last_download_path):
-                file_size = os.path.getsize(self._last_download_path)
+            if completed_path and os.path.isfile(completed_path):
+                file_size = os.path.getsize(completed_path)
             entry = HistoryEntry(
                 title=item.title or title,
                 url=item.url,
                 format_type=item.format_type,
                 quality=item.quality,
-                file_path=self._last_download_path or "",
+                file_path=completed_path,
                 file_size=file_size,
             )
             self._history_manager.add(entry)
@@ -1824,7 +1945,7 @@ class MainWindow(QMainWindow):
         self.cancel_btn.setVisible(False)
         self.open_folder_btn.setVisible(False)
         self.progress_bar.reset()
-        self._progress_status_label.setText("")
+        self._set_progress_status("")
 
         item = self._current_queue_item
         self._current_queue_item = None
