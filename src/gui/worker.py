@@ -1,8 +1,10 @@
 """Потокобезопасные рабочие задачи (QThread) для YouTube Medialoader.
 
-Содержит классы:
+Содержит базовый класс :class:`_BaseWorker` (Template Method) и три
+наследника:
   - VideoInfoWorker - асинхронное получение информации о видео
   - DownloadWorker - асинхронная загрузка видео/аудио с прогрессом
+  - PlaylistWorker - асинхронное получение списка видео из плейлиста
 """
 
 from __future__ import annotations
@@ -15,7 +17,46 @@ from PySide6.QtCore import QObject, Signal
 from src.downloader import YouTubeDownloader
 
 
-class VideoInfoWorker(QObject):
+class _BaseWorker(QObject):
+    """Базовый рабочий объект, выполняющийся в отдельном QThread.
+
+    Реализует шаблонный метод :meth:`run`: оборачивает :meth:`_perform`
+    в try/except и сообщает об ошибке через сигнал :attr:`error_occurred`.
+    Наследники реализуют только полезную работу в :meth:`_perform` и
+    (при необходимости) подавляют ошибку через :meth:`_should_report_error`
+    (например, отмену загрузки пользователем).
+
+    Сигналы:
+        error_occurred: Срабатывает при ошибке. Передаeт текст ошибки.
+    """
+
+    error_occurred = Signal(str)
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._downloader = YouTubeDownloader()
+
+    def _perform(self) -> None:
+        """Выполнить полезную работу worker'а (реализуется наследником)."""
+        raise NotImplementedError
+
+    def _should_report_error(self) -> bool:
+        """Нужно ли сообщать об ошибке (``True`` по умолчанию)."""
+        return True
+
+    def run(self) -> None:
+        """Запустить работу в фоновом потоке.
+
+        Вызывается из QThread.started. Результат отправляется через сигналы.
+        """
+        try:
+            self._perform()
+        except Exception as exc:
+            if self._should_report_error():
+                self.error_occurred.emit(str(exc))
+
+
+class VideoInfoWorker(_BaseWorker):
     """Асинхронное получение информации о видео в фоновом потоке.
 
     Запускается в отдельном QThread. Результат или ошибка возвращаются
@@ -28,7 +69,6 @@ class VideoInfoWorker(QObject):
     """
 
     info_fetched = Signal(dict)
-    error_occurred = Signal(str)
 
     # Счeтчик последовательности для детекции устаревших результатов запроса
     _fetch_seq: int = 0
@@ -42,21 +82,13 @@ class VideoInfoWorker(QObject):
         """
         super().__init__(parent)
         self._url = url
-        self._downloader = YouTubeDownloader()
 
-    def run(self) -> None:
-        """Запустить получение информации о видео.
-
-        Вызывается из QThread.started. Отправляет результат через сигналы.
-        """
-        try:
-            info = self._downloader.get_video_info(self._url)
-            self.info_fetched.emit(info)
-        except Exception as exc:
-            self.error_occurred.emit(str(exc))
+    def _perform(self) -> None:
+        info = self._downloader.get_video_info(self._url)
+        self.info_fetched.emit(info)
 
 
-class DownloadWorker(QObject):
+class DownloadWorker(_BaseWorker):
     """Асинхронная загрузка видео/аудио в фоновом потоке.
 
     Предоставляет сигналы прогресса, завершения и ошибки. Поддерживает
@@ -71,7 +103,6 @@ class DownloadWorker(QObject):
 
     progress = Signal(dict)
     finished = Signal()
-    error_occurred = Signal(str)
 
     def __init__(
         self,
@@ -100,7 +131,6 @@ class DownloadWorker(QObject):
         self._format_type = format_type
         self._quality = quality
         self._cancel_event = threading.Event()
-        self._downloader = YouTubeDownloader()
 
     @property
     def cancel_event(self) -> threading.Event:
@@ -110,26 +140,22 @@ class DownloadWorker(QObject):
         """
         return self._cancel_event
 
-    def run(self) -> None:
-        """Запустить загрузку в фоновом потоке.
+    def _perform(self) -> None:
+        self._downloader.download(
+            url=self._url,
+            output_path=self._output_path,
+            filename=self._filename,
+            format_type=self._format_type,
+            quality=self._quality,
+            progress_callback=self._on_progress,
+            cancel_event=self._cancel_event,
+        )
+        if not self._cancel_event.is_set():
+            self.finished.emit()
 
-        Вызывается из QThread.started. Результат отправляется через сигналы.
-        """
-        try:
-            self._downloader.download(
-                url=self._url,
-                output_path=self._output_path,
-                filename=self._filename,
-                format_type=self._format_type,
-                quality=self._quality,
-                progress_callback=self._on_progress,
-                cancel_event=self._cancel_event,
-            )
-            if not self._cancel_event.is_set():
-                self.finished.emit()
-        except Exception as exc:
-            if not self._cancel_event.is_set():
-                self.error_occurred.emit(str(exc))
+    def _should_report_error(self) -> bool:
+        # При отмене пользователем никаких сигналов: ни finished, ни error.
+        return not self._cancel_event.is_set()
 
     def _on_progress(self, data: dict[str, Any]) -> None:
         """Пробросить обновление прогресса через Qt-сигнал.
@@ -140,7 +166,7 @@ class DownloadWorker(QObject):
         self.progress.emit(data)
 
 
-class PlaylistWorker(QObject):
+class PlaylistWorker(_BaseWorker):
     """Асинхронное получение списка видео из плейлиста YouTube.
 
     Запускается в отдельном QThread. Возвращает список видео через
@@ -154,7 +180,6 @@ class PlaylistWorker(QObject):
     """
 
     playlist_fetched = Signal(list)
-    error_occurred = Signal(str)
 
     def __init__(self, url: str, parent: QObject | None = None) -> None:
         """Инициализация рабочего объекта плейлиста.
@@ -165,15 +190,7 @@ class PlaylistWorker(QObject):
         """
         super().__init__(parent)
         self._url = url
-        self._downloader = YouTubeDownloader()
 
-    def run(self) -> None:
-        """Запустить получение информации о плейлисте.
-
-        Вызывается из QThread.started. Отправляет результат через сигналы.
-        """
-        try:
-            entries = self._downloader.get_playlist_info(self._url)
-            self.playlist_fetched.emit(entries)
-        except Exception as exc:
-            self.error_occurred.emit(str(exc))
+    def _perform(self) -> None:
+        entries = self._downloader.get_playlist_info(self._url)
+        self.playlist_fetched.emit(entries)

@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "youtube-medialoader"
-version = "v2.2-stable"
+version = "2.3.0"
 description = "Десктопное приложение для скачивания видео и аудио с YouTube"
 readme = "README.md"
 license = {text = "AGPL-3.0"}
@@ -45,3 +45,7 @@ include = ["src*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+markers = [
+    "integration: сетевой тест; запускается только с YML_INTEGRATION=1",
+]

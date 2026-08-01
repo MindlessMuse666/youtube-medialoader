@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
 )
 
 from src.gui import styles as gui_styles
+from src.utils.formatters import format_duration
+from src.utils.theme import BG, BG_BLACK, BORDER, CYAN, GRAY, GRAY_DARK, PINK, WHITE
 
 
 class _PlaylistItemWidget(QWidget):
@@ -49,19 +51,19 @@ class _PlaylistItemWidget(QWidget):
 
         # Чекбокс
         self.checkbox = QCheckBox()
-        self.checkbox.setStyleSheet("""
-            QCheckBox::indicator {
+        self.checkbox.setStyleSheet(f"""
+            QCheckBox::indicator {{
                 width: 18px; height: 18px;
-                border: 1px solid #00E5FF; border-radius: 3px;
-                background: #1A1A1A;
-            }
-            QCheckBox::indicator:checked {
-                background: #00E5FF;
-                border-color: #00E5FF;
-            }
-            QCheckBox::indicator:hover {
-                border-color: #FF4081;
-            }
+                border: 1px solid {CYAN}; border-radius: 3px;
+                background: {BG};
+            }}
+            QCheckBox::indicator:checked {{
+                background: {CYAN};
+                border-color: {CYAN};
+            }}
+            QCheckBox::indicator:hover {{
+                border-color: {PINK};
+            }}
         """)
         layout.addWidget(self.checkbox)
 
@@ -69,7 +71,7 @@ class _PlaylistItemWidget(QWidget):
         idx = self.entry.get("index", "")
         idx_label = QLabel(f"#{idx}" if idx else "")
         idx_label.setFixedWidth(32)
-        idx_label.setStyleSheet("color: #AAAAAA; font-size: 11px;")
+        idx_label.setStyleSheet(f"color: {GRAY}; font-size: 11px;")
         layout.addWidget(idx_label)
 
         # Информация о видео
@@ -79,16 +81,14 @@ class _PlaylistItemWidget(QWidget):
         title = self.entry.get("title", "Untitled")
         title_label = QLabel(title)
         title_label.setWordWrap(True)
-        title_label.setStyleSheet("color: #FFFFFF; font-size: 12px; font-weight: bold;")
+        title_label.setStyleSheet(f"color: {WHITE}; font-size: 12px; font-weight: bold;")
         info_layout.addWidget(title_label)
 
         # Длительность
         duration = self.entry.get("duration", 0)
         if duration:
-            minutes, secs = divmod(int(duration), 60)
-            dur_str = f"{minutes}:{secs:02d}"
-            dur_label = QLabel(f"⏱ {dur_str}")
-            dur_label.setStyleSheet("color: #888888; font-size: 10px;")
+            dur_label = QLabel(f"⏱ {format_duration(int(duration))}")
+            dur_label.setStyleSheet(f"color: {GRAY_DARK}; font-size: 10px;")
             info_layout.addWidget(dur_label)
 
         layout.addLayout(info_layout, 1)
@@ -150,7 +150,7 @@ class PlaylistDialog(QDialog):
         title_label.setObjectName("playlistTitle")
         title_label.setStyleSheet(
             f"font-family: {gui_styles.PIXEL_FONT_FAMILY}; "
-            f"font-size: 12pt; color: #00E5FF; font-weight: bold;"
+            f"font-size: 12pt; color: {CYAN}; font-weight: bold;"
         )
         layout.addWidget(title_label)
 
@@ -182,8 +182,8 @@ class PlaylistDialog(QDialog):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         scroll.setStyleSheet(
-            "QScrollArea { background: #1A1A1A; border: 1px solid #2A2A2A; "
-            "border-radius: 6px; }"
+            f"QScrollArea {{ background: {BG}; border: 1px solid {BORDER}; "
+            f"border-radius: 6px; }}"
         )
 
         list_widget = QWidget()
@@ -194,8 +194,11 @@ class PlaylistDialog(QDialog):
         for entry in self._entries:
             item = _PlaylistItemWidget(entry)
             item.checkbox.toggled.connect(self._update_count)
-            item.checkbox.setChecked(True)  # все выбраны по умолчанию
+            # Добавляем в список ДО отметки: setChecked дёргает сигнал
+            # toggled -> _update_count, который считает только уже
+            # добавленные элементы. Иначе последний не попадает в счётчик.
             self._item_widgets.append(item)
+            item.checkbox.setChecked(True)  # все выбраны по умолчанию
             list_layout.addWidget(item)
 
         list_layout.addStretch()
@@ -247,35 +250,35 @@ class PlaylistDialog(QDialog):
         """Вернуть QSS-стили для диалога."""
         return f"""
             PlaylistDialog {{
-                background-color: #0A0A0A;
+                background-color: {BG_BLACK};
             }}
             QLabel#playlistCount {{
-                color: #AAAAAA; font-size: 12px;
+                color: {GRAY}; font-size: 12px;
             }}
             QPushButton#playlistActionBtn {{
                 background-color: transparent;
-                border: 1px solid #00E5FF; border-radius: 4px;
+                border: 1px solid {CYAN}; border-radius: 4px;
                 padding: 6px 14px;
-                color: #00E5FF; font-size: 11px;
+                color: {CYAN}; font-size: 11px;
             }}
             QPushButton#playlistActionBtn:hover {{
                 background-color: rgba(0, 229, 255, 0.1);
-                border-color: #FF4081; color: #FF4081;
+                border-color: {PINK}; color: {PINK};
             }}
             QPushButton#playlistDownloadBtn {{
-                background-color: #00E5FF;
+                background-color: {CYAN};
                 border: none; border-radius: 6px;
                 padding: 12px 24px;
-                color: #0A0A0A; font-size: 13px; font-weight: bold;
+                color: {BG_BLACK}; font-size: 13px; font-weight: bold;
             }}
             QPushButton#playlistDownloadBtn:hover {{
-                background-color: #FF4081;
+                background-color: {PINK};
             }}
             QScrollBar:vertical {{
-                background: #1A1A1A; width: 8px;
+                background: {BG}; width: 8px;
             }}
             QScrollBar::handle:vertical {{
-                background: #00E5FF; border-radius: 4px;
+                background: {CYAN}; border-radius: 4px;
                 min-height: 30px;
             }}
         """

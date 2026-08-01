@@ -12,6 +12,8 @@ from datetime import datetime
 
 from PySide6.QtCore import QSettings
 
+from src.utils import constants
+
 
 @dataclass
 class HistoryEntry:
@@ -52,7 +54,7 @@ class HistoryManager:
 
     def __init__(self) -> None:
         """Инициализация менеджера истории."""
-        self._settings = QSettings("MindlessMuse666", "YouTube-Medialoader")
+        self._settings = QSettings(constants.ORG_NAME, constants.SETTINGS_APP)
         self._entries: list[HistoryEntry] = []
         self._load()
 

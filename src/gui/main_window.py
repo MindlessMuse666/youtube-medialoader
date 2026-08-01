@@ -10,7 +10,6 @@ import html
 import os
 import re
 from typing import Any
-from urllib.parse import urlparse
 
 from PySide6.QtCore import (
     QAbstractAnimation,
@@ -65,12 +64,21 @@ from src.gui.widgets import LoadingSpinner, NeonButton, NeonProgressBar, Toast
 from src.gui.history_dialog import HistoryDialog
 from src.gui.playlist_dialog import PlaylistDialog
 from src.gui.worker import DownloadWorker, PlaylistWorker, VideoInfoWorker
+from src.utils import constants
 from src.utils.file_utils import (
     assets_dir,
     resolve_filename,
     reveal_in_file_manager,
 )
+from src.utils.formatters import (
+    format_duration,
+    format_eta,
+    format_filesize,
+    format_speed,
+)
 from src.utils.history import HistoryEntry, HistoryManager
+from src.utils.theme import BG, BORDER, CYAN, GREEN, PINK, TEXT, YELLOW
+from src.utils.url_utils import is_playlist_url, validate_url
 
 
 # Press Start 2P не содержит глифов эмодзи: без явного шрифта-фолбэка Qt
@@ -97,6 +105,10 @@ _EMOJI_RE = re.compile(
 # maximumHeight: тогда панель может естественно расти при появлении строки
 # статуса загрузки под прогресс-баром, не обрезая её.
 _UNBOUNDED_HEIGHT = 16_777_215
+
+# Потолок кеша миниатюр: QPixmap'ы занимают память, а ссылок в ходе сессии
+# могут быть десятки. При превышении вытесняем самую старую запись (FIFO).
+_MAX_THUMBNAILS = 40
 
 
 class MainWindow(QMainWindow):
@@ -161,6 +173,11 @@ class MainWindow(QMainWindow):
         # Отслеживаем последнюю папку для QSettings
         self._last_save_path: str = ""
 
+        # Путь к последнему завершённому файлу (для кнопки "ОТКРЫТЬ ПАПКУ").
+        # Инициализируем здесь: до первой загрузки кнопка не видна, но
+        # обработчик всё равно должен корректно отработать пустой путь.
+        self._last_download_path: str = ""
+
         # Network manager для асинхронной загрузки миниатюр
         self._network_manager = QNetworkAccessManager(self)
         self._network_manager.finished.connect(self._on_thumbnail_loaded)
@@ -208,7 +225,7 @@ class MainWindow(QMainWindow):
         Восстанавливает геометрию окна, последнюю папку сохранения,
         выбранный тип/качество и список недавних ссылок.
         """
-        settings = QSettings("MindlessMuse666", "YouTube-Medialoader")
+        settings = QSettings(constants.ORG_NAME, constants.SETTINGS_APP)
 
         # Геометрия окна
         geo = settings.value("window/geometry")
@@ -246,7 +263,7 @@ class MainWindow(QMainWindow):
 
     def _save_settings(self) -> None:
         """Сохранить текущие настройки приложения."""
-        settings = QSettings("MindlessMuse666", "YouTube-Medialoader")
+        settings = QSettings(constants.ORG_NAME, constants.SETTINGS_APP)
         settings.setValue("window/geometry", self.saveGeometry())
         settings.setValue("window/state", self.saveState())
         settings.setValue("save/directory", self.path_input.text())
@@ -387,7 +404,7 @@ class MainWindow(QMainWindow):
         Args:
             url: Ссылка на YouTube-видео.
         """
-        settings = QSettings("MindlessMuse666", "YouTube-Medialoader")
+        settings = QSettings(constants.ORG_NAME, constants.SETTINGS_APP)
         recent: list[str] = settings.value("urls/recent", [], type=list)
         # Удаляем дубликат если уже есть, добавляем в начало
         if url in recent:
@@ -448,7 +465,7 @@ class MainWindow(QMainWindow):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         parent.addWidget(title)
 
-        subtitle = QLabel("v2.2-stable | mp4 / mp3 / плейлисты")
+        subtitle = QLabel(f"{constants.RELEASE_TAG} | mp4 / mp3 / плейлисты")
         subtitle.setObjectName("subtitleLabel")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         parent.addWidget(subtitle)
@@ -592,12 +609,12 @@ class MainWindow(QMainWindow):
         self._thumbnail_label.setObjectName("thumbnail")
         self._thumbnail_label.setFixedSize(160, 90)
         self._thumbnail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._thumbnail_label.setStyleSheet("""
-            QLabel#thumbnail {
-                background-color: #1A1A1A;
-                border: 1px solid #2A2A2A;
+        self._thumbnail_label.setStyleSheet(f"""
+            QLabel#thumbnail {{
+                background-color: {BG};
+                border: 1px solid {BORDER};
                 border-radius: 4px;
-            }
+            }}
         """)
         info_h_layout.addWidget(self._thumbnail_label)
 
@@ -666,7 +683,7 @@ class MainWindow(QMainWindow):
         btn_row.setSpacing(12)
 
         self.download_btn = NeonButton("СКАЧАТЬ")
-        self.cancel_btn = NeonButton("ОТМЕНА", accent_color="#FF4081")
+        self.cancel_btn = NeonButton("ОТМЕНА", accent_color=PINK)
         self.cancel_btn.setVisible(False)
         self.open_folder_btn = NeonButton("ОТКРЫТЬ ПАПКУ")
         self.open_folder_btn.setVisible(False)
@@ -799,7 +816,7 @@ class MainWindow(QMainWindow):
         mime: QMimeData | None = event.mimeData()
         if mime is not None and mime.hasText():
             text = mime.text().strip()
-            if self._validate_url(text) is None:
+            if validate_url(text) is None:
                 event.acceptProposedAction()
                 return
         event.ignore()
@@ -813,7 +830,7 @@ class MainWindow(QMainWindow):
         mime: QMimeData | None = event.mimeData()
         if mime is not None and mime.hasText():
             text = mime.text().strip()
-            if self._validate_url(text) is None:
+            if validate_url(text) is None:
                 self.url_input.setText(text)
                 # Принудительно запускаем предпросмотр
                 self._fetch_timer.stop()
@@ -1005,7 +1022,7 @@ class MainWindow(QMainWindow):
             return
 
         # Валидация URL перед запуском потока
-        error = self._validate_url(url)
+        error = validate_url(url)
         if error is not None:
             self.show_toast(f"Неверная ссылка: {error}", Toast.ERROR)
             return
@@ -1018,28 +1035,10 @@ class MainWindow(QMainWindow):
         self._hide_info_preview()
 
         # Проверяем, является ли URL плейлистом
-        if self._is_playlist_url(url):
+        if is_playlist_url(url):
             self._fetch_playlist(url)
         else:
             self._fetch_video_info(url)
-
-    @staticmethod
-    def _is_playlist_url(url: str) -> bool:
-        """Проверить, является ли ссылка ссылкой на плейлист.
-
-        Args:
-            url: Ссылка для проверки.
-
-        Returns:
-            ``True`` если URL содержит ``list=`` параметр.
-        """
-        parsed = urlparse(url)
-        if "youtube.com" in parsed.netloc and "list=" in parsed.query:
-            return True
-        # youtu.be ссылки с list параметром
-        if "youtu.be" in parsed.netloc and "list=" in parsed.query:
-            return True
-        return False
 
     def _fetch_video_info(self, url: str) -> None:
         """Запустить асинхронное получение информации о видео.
@@ -1151,8 +1150,8 @@ class MainWindow(QMainWindow):
         self._current_video_url = worker_url
 
         # Форматируем данные для отображения
-        duration_str = self._format_duration(duration_secs)
-        size_str = self._format_filesize(filesize) if filesize else "неизвестно"
+        duration_str = format_duration(duration_secs)
+        size_str = format_filesize(filesize) if filesize else "неизвестно"
 
         # Обновляем блок предпросмотра с анимацией
         self.video_title_label.setText(f"Название: {title}")
@@ -1248,7 +1247,7 @@ class MainWindow(QMainWindow):
 
                 self.log_message(
                     f"📋 Добавлено {count} видео из плейлиста в очередь",
-                    "#00E5FF",
+                    CYAN,
                 )
 
                 # Запускаем обработку очереди
@@ -1346,94 +1345,6 @@ class MainWindow(QMainWindow):
         self._is_custom_filename = bool(text) and text != self._current_video_title
 
     # ------------------------------------------------------------------
-    # Валидация URL
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _validate_url(url: str) -> str | None:
-        """Проверить, что ссылка является корректным YouTube-URL.
-
-        Args:
-            url: Ссылка для проверки.
-
-        Returns:
-            ``None`` если URL корректен, иначе строка с описанием ошибки.
-        """
-        url = url.strip()
-        if not url:
-            return "Ссылка пуста"
-
-        # Должна начинаться с http:// или https://
-        if not url.startswith(("http://", "https://")):
-            return "Ссылка должна начинаться с http:// или https://"
-
-        # Проверяем дублирование - явный признак мусора
-        if url.count("youtube.com") > 1 or url.count("youtu.be") > 1:
-            return "Обнаружено дублирование домена в ссылке"
-
-        # Должна содержать youtube.com или youtu.be
-        parsed = urlparse(url)
-        netloc = parsed.netloc.lower()
-        if "youtube.com" not in netloc and "youtu.be" not in netloc:
-            return "Ссылка должна вести на youtube.com или youtu.be"
-
-        # Для youtube.com - нужен параметр v (id видео)
-        if "youtube.com" in netloc:
-            if not parsed.query:
-                return "Не указан ID видео (параметр v=)"
-            params = dict(param.split("=", 1) for param in parsed.query.split("&") if "=" in param)
-            video_id = params.get("v", "")
-            if not video_id:
-                return "Не указан ID видео (параметр v=)"
-
-        # Для youtu.be - нужен path
-        if "youtu.be" in netloc:
-            path = parsed.path.strip("/")
-            if not path:
-                return "Не указан ID видео"
-
-        return None
-
-    # ------------------------------------------------------------------
-    # Форматтеры
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _format_duration(seconds: int) -> str:
-        """Преобразовать секунды в читаемый формат ``ЧЧ:ММ:СС`` или ``ММ:СС``.
-
-        Args:
-            seconds: Длительность в секундах.
-
-        Returns:
-            Отформатированная строка длительности.
-        """
-        hours, remainder = divmod(seconds, 3600)
-        minutes, secs = divmod(remainder, 60)
-        if hours > 0:
-            return f"{hours}:{minutes:02d}:{secs:02d}"
-        return f"{minutes}:{secs:02d}"
-
-    @staticmethod
-    def _format_filesize(size_bytes: int) -> str:
-        """Преобразовать байты в читаемый размер (КБ, МБ, ГБ).
-
-        Args:
-            size_bytes: Размер в байтах.
-
-        Returns:
-            Отформатированная строка размера.
-        """
-        if size_bytes < 1024:
-            return f"{size_bytes} Б"
-        elif size_bytes < 1024**2:
-            return f"{size_bytes / 1024:.1f} КБ"
-        elif size_bytes < 1024**3:
-            return f"{size_bytes / 1024**2:.1f} МБ"
-        else:
-            return f"{size_bytes / 1024**3:.2f} ГБ"
-
-    # ------------------------------------------------------------------
     # Загрузка миниатюры (thumbnail)
     # ------------------------------------------------------------------
 
@@ -1479,6 +1390,9 @@ class MainWindow(QMainWindow):
             pixmap = QPixmap()
             if pixmap.loadFromData(data):
                 url = reply.url().toString()
+                # Ограничиваем размер кеша миниатюр: вытесняем самую старую запись
+                if len(self._thumbnail_cache) >= _MAX_THUMBNAILS:
+                    self._thumbnail_cache.pop(next(iter(self._thumbnail_cache)))
                 self._thumbnail_cache[url] = pixmap
                 scaled = pixmap.scaled(
                     158, 88,
@@ -1610,7 +1524,7 @@ class MainWindow(QMainWindow):
             self.show_toast("Введите ссылку на видео", Toast.WARNING)
             return
 
-        error = self._validate_url(url)
+        error = validate_url(url)
         if error is not None:
             self.show_toast(f"Неверная ссылка: {error}", Toast.ERROR)
             return
@@ -1643,7 +1557,7 @@ class MainWindow(QMainWindow):
 
         self.log_message(
             f"📋 Добавлено в очередь: {item.title[:50]}",
-            "#00E5FF",
+            CYAN,
         )
 
         # Запускаем обработку очереди. Если загрузка уже идёт, _process_queue
@@ -1669,7 +1583,7 @@ class MainWindow(QMainWindow):
             self.cancel_btn.setVisible(False)
             self.type_combo.setEnabled(True)
             self.quality_combo.setEnabled(True)
-            self.log_message("✅ Все загрузки завершены", "#00FF88")
+            self.log_message("✅ Все загрузки завершены", GREEN)
             return
 
         # Отмечаем как скачиваемый
@@ -1688,7 +1602,7 @@ class MainWindow(QMainWindow):
 
         self.log_message(
             f"⏳ [{item.title[:40]}]: начинаем загрузку...",
-            "#00E5FF",
+            CYAN,
         )
 
         # Создаeм поток и worker
@@ -1721,7 +1635,7 @@ class MainWindow(QMainWindow):
 
         self.log_message(
             f"📥 Скачивание в: {item.output_path}",
-            "#00E5FF",
+            CYAN,
         )
 
     def _on_cancel_clicked(self) -> None:
@@ -1750,9 +1664,9 @@ class MainWindow(QMainWindow):
         if item is not None:
             self._queue_widget.mark_cancelled(item)
             title = item.title or "файл"
-            self.log_message(f"⏹ [{title[:40]}]: загрузка отменена", "#FFC107")
+            self.log_message(f"⏹ [{title[:40]}]: загрузка отменена", YELLOW)
         else:
-            self.log_message("⏹ Отмена загрузки...", "#FFC107")
+            self.log_message("⏹ Отмена загрузки...", YELLOW)
         self.show_toast("Отмена загрузки…", Toast.WARNING)
 
         # Просим yt-dlp остановиться
@@ -1793,31 +1707,13 @@ class MainWindow(QMainWindow):
                 percent = int(downloaded / total * 100)
                 self.progress_bar.animate_to(percent)
 
-            # Форматируем скорость
-            speed = data.get("speed", 0)
-            speed_str = ""
-            if speed:
-                if speed > 1_000_000:
-                    speed_str = f"{speed / 1_000_000:.1f} MB/s"
-                elif speed > 1_000:
-                    speed_str = f"{speed / 1_000:.0f} KB/s"
-                else:
-                    speed_str = f"{speed:.0f} B/s"
-
-            # ETA
-            eta = data.get("eta", 0)
-            eta_str = ""
-            if eta and eta > 0:
-                hours, remainder = divmod(int(eta), 3600)
-                minutes, secs = divmod(remainder, 60)
-                if hours > 0:
-                    eta_str = f"{hours}:{minutes:02d}:{secs:02d}"
-                else:
-                    eta_str = f"{minutes}:{secs:02d}"
+            # Скорость и ETA - через общие форматтеры (см. src.utils.formatters)
+            speed_str = format_speed(data.get("speed", 0))
+            eta_str = format_eta(data.get("eta", 0))
 
             # Размеры файлов
-            dl_str = self._format_filesize(downloaded) if downloaded else "?"
-            total_str = self._format_filesize(total) if total else "?"
+            dl_str = format_filesize(downloaded) if downloaded else "?"
+            total_str = format_filesize(total) if total else "?"
 
             # Собираем строку статуса
             parts = [f"{dl_str} / {total_str}"]
@@ -1863,7 +1759,7 @@ class MainWindow(QMainWindow):
         if item is not None:
             self._queue_widget.mark_completed(item)
             title = item.title or "файл"
-            self.log_message(f"✅ [{title[:40]}]: загрузка завершена!", "#00FF88")
+            self.log_message(f"✅ [{title[:40]}]: загрузка завершена!", GREEN)
             self.show_toast(f"Загрузка завершена: {title[:30]}", Toast.SUCCESS)
 
             # Полный путь к завершённому файлу считаем из самого элемента
@@ -1900,7 +1796,7 @@ class MainWindow(QMainWindow):
             )
             self._history_manager.add(entry)
         else:
-            self.log_message("✅ Загрузка завершена!", "#00FF88")
+            self.log_message("✅ Загрузка завершена!", GREEN)
             self.show_toast("Загрузка завершена!", Toast.SUCCESS)
 
         if thread is not None:
@@ -1956,10 +1852,10 @@ class MainWindow(QMainWindow):
         if item is not None:
             self._queue_widget.mark_error(item, error_text)
             title = item.title or "файл"
-            self.log_message(f"❌ [{title[:40]}]: {error_text}", "#FF4081")
+            self.log_message(f"❌ [{title[:40]}]: {error_text}", PINK)
             self.show_toast(f"Ошибка: {title[:30]}", Toast.ERROR)
         else:
-            self.log_message(f"❌ Ошибка: {error_text}", "#FF4081")
+            self.log_message(f"❌ Ошибка: {error_text}", PINK)
             self.show_toast(f"Ошибка загрузки: {error_text}", Toast.ERROR)
 
         if thread is not None:
@@ -2019,7 +1915,7 @@ class MainWindow(QMainWindow):
             text,
         )
 
-    def log_message(self, message: str, color: str = "#CCCCCC") -> None:
+    def log_message(self, message: str, color: str = TEXT) -> None:
         """Добавить цветное сообщение в область логов.
 
         Текст экранируется от HTML-инъекций, а эмодзи оборачиваются
@@ -2027,7 +1923,7 @@ class MainWindow(QMainWindow):
 
         Args:
             message: Текст сообщения.
-            color: CSS-цвет (например, ``"#00E5FF"``).
+            color: CSS-цвет (например, ``CYAN``).
         """
         content = self._wrap_emoji(html.escape(message))
         self.log_area.append(f'<span style="color: {color}">{content}</span>')

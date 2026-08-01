@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.utils.theme import BORDER, CYAN, GRAY, GRAY_DARK, GREEN, PINK, WHITE, YELLOW
+
 
 class QueueItemStatus(Enum):
     """Статус элемента в очереди загрузки."""
@@ -85,11 +87,11 @@ class _QueueItemWidget(QWidget):
     """Виджет одного элемента очереди."""
 
     STATUS_COLORS = {
-        QueueItemStatus.PENDING: "#AAAAAA",
-        QueueItemStatus.DOWNLOADING: "#00E5FF",
-        QueueItemStatus.COMPLETED: "#00FF88",
-        QueueItemStatus.ERROR: "#FF4081",
-        QueueItemStatus.CANCELLED: "#FFC107",
+        QueueItemStatus.PENDING: GRAY,
+        QueueItemStatus.DOWNLOADING: CYAN,
+        QueueItemStatus.COMPLETED: GREEN,
+        QueueItemStatus.ERROR: PINK,
+        QueueItemStatus.CANCELLED: YELLOW,
     }
 
     STATUS_LABELS = {
@@ -126,7 +128,7 @@ class _QueueItemWidget(QWidget):
         # Индекс
         idx_label = QLabel(f"#{self.index + 1}")
         idx_label.setFixedWidth(24)
-        idx_label.setStyleSheet("color: #AAAAAA; font-size: 11px;")
+        idx_label.setStyleSheet(f"color: {GRAY}; font-size: 11px;")
         layout.addWidget(idx_label)
 
         # Информация о файле
@@ -137,18 +139,18 @@ class _QueueItemWidget(QWidget):
         if len(title_text) > 50:
             title_text = title_text[:47] + "…"
         title_label = QLabel(title_text)
-        title_label.setStyleSheet("color: #FFFFFF; font-size: 12px;")
+        title_label.setStyleSheet(f"color: {WHITE}; font-size: 12px;")
         info_layout.addWidget(title_label)
 
         details = _format_details(self.item.format_type, self.item.quality)
         detail_label = QLabel(details)
-        detail_label.setStyleSheet("color: #888888; font-size: 10px;")
+        detail_label.setStyleSheet(f"color: {GRAY_DARK}; font-size: 10px;")
         info_layout.addWidget(detail_label)
 
         layout.addLayout(info_layout, 1)
 
         # Статус
-        color = self.STATUS_COLORS.get(self.item.status, "#AAAAAA")
+        color = self.STATUS_COLORS.get(self.item.status, GRAY)
         label = self.STATUS_LABELS.get(self.item.status, "")
         status_label = QLabel(label)
         status_label.setStyleSheet(f"color: {color}; font-size: 11px;")
@@ -209,8 +211,8 @@ class DownloadQueueWidget(QGroupBox):
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._scroll.setFixedHeight(self.MIN_HEIGHT)
         self._scroll.setStyleSheet(
-            "QScrollArea { background: transparent; border: 1px solid #2A2A2A; "
-            "border-radius: 4px; }"
+            f"QScrollArea {{ background: transparent; border: 1px solid {BORDER}; "
+            f"border-radius: 4px; }}"
         )
 
         self._list_widget = QWidget()

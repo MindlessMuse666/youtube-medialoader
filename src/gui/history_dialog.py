@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from src.gui.widgets import Toast
 from src.utils.file_utils import reveal_in_file_manager
 from src.utils.history import HistoryEntry, HistoryManager
+from src.utils.theme import BG, BG_BLACK, BG_TABLE, BORDER, CYAN, GREEN, PINK, TEXT
 
 _DATETIME_FMT = "%Y.%m.%d %H:%M"
 
@@ -194,82 +195,82 @@ class HistoryDialog(QDialog):
     @staticmethod
     def _get_dialog_qss() -> str:
         """Вернуть QSS-стили для диалога истории."""
-        return """
-            HistoryDialog {
-                background-color: #0A0A0A;
-            }
-            QLabel#historyTitle {
+        return f"""
+            HistoryDialog {{
+                background-color: {BG_BLACK};
+            }}
+            QLabel#historyTitle {{
                 font-size: 14pt;
-                color: #00E5FF;
+                color: {CYAN};
                 font-weight: bold;
-            }
-            QTableWidget {
-                background-color: #111111;
-                alternate-background-color: #1A1A1A;
-                color: #CCCCCC;
-                border: 1px solid #2A2A2A;
+            }}
+            QTableWidget {{
+                background-color: {BG_TABLE};
+                alternate-background-color: {BG};
+                color: {TEXT};
+                border: 1px solid {BORDER};
                 border-radius: 6px;
                 font-size: 11px;
                 outline: none;
-            }
-            QTableWidget::item {
+            }}
+            QTableWidget::item {{
                 padding: 4px 8px;
-            }
-            QTableWidget::item:selected {
+            }}
+            QTableWidget::item:selected {{
                 background-color: rgba(0, 229, 255, 0.15);
-                color: #00E5FF;
-            }
-            QHeaderView::section {
-                background-color: #1A1A1A;
-                color: #00E5FF;
+                color: {CYAN};
+            }}
+            QHeaderView::section {{
+                background-color: {BG};
+                color: {CYAN};
                 border: none;
-                border-bottom: 1px solid #2A2A2A;
+                border-bottom: 1px solid {BORDER};
                 padding: 6px 8px;
                 font-size: 11px;
                 font-weight: bold;
-            }
-            QPushButton#historyClearBtn {
+            }}
+            QPushButton#historyClearBtn {{
                 background-color: transparent;
-                border: 1px solid #FF4081;
+                border: 1px solid {PINK};
                 border-radius: 4px;
                 padding: 6px 14px;
-                color: #FF4081;
+                color: {PINK};
                 font-size: 11px;
                 min-height: 32px;
-            }
-            QPushButton#historyClearBtn:hover {
+            }}
+            QPushButton#historyClearBtn:hover {{
                 background-color: rgba(255, 64, 129, 0.1);
-            }
-            QPushButton#historyCloseBtn {
+            }}
+            QPushButton#historyCloseBtn {{
                 background-color: transparent;
-                border: 1px solid #00E5FF;
+                border: 1px solid {CYAN};
                 border-radius: 4px;
                 padding: 6px 16px;
-                color: #00E5FF;
+                color: {CYAN};
                 font-size: 11px;
                 min-height: 32px;
-            }
-            QPushButton#historyCloseBtn:hover {
+            }}
+            QPushButton#historyCloseBtn:hover {{
                 background-color: rgba(0, 229, 255, 0.1);
-            }
-            QPushButton#historyOpenBtn {
+            }}
+            QPushButton#historyOpenBtn {{
                 background-color: transparent;
-                border: 1px solid #00FF88;
+                border: 1px solid {GREEN};
                 border-radius: 3px;
                 padding: 2px 8px;
-                color: #00FF88;
+                color: {GREEN};
                 font-size: 10px;
-            }
-            QPushButton#historyOpenBtn:hover {
+            }}
+            QPushButton#historyOpenBtn:hover {{
                 background-color: rgba(0, 255, 136, 0.15);
-            }
-            QScrollBar:vertical {
-                background: #1A1A1A;
+            }}
+            QScrollBar:vertical {{
+                background: {BG};
                 width: 8px;
-            }
-            QScrollBar::handle:vertical {
-                background: #00E5FF;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {CYAN};
                 border-radius: 4px;
                 min-height: 30px;
-            }
+            }}
         """

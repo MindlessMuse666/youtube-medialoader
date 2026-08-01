@@ -15,16 +15,18 @@ from PySide6.QtWidgets import QApplication
 
 from src.gui.main_window import MainWindow
 from src.gui.widgets import Toast
+from src.utils import constants
 from src.utils.file_utils import assets_dir
 from src.utils.logger import get_log_signal
+from src.utils.theme import CYAN, GREEN, PINK, TEXT, YELLOW
 from src.utils.update_checker import UpdateChecker
 
-# Цветовые константы для логов (HEX)
+# Цветовые константы для логов - из единой палитры неоновой темы
 LOG_COLORS = {
-    "INFO": "#00E5FF",
-    "SUCCESS": "#00FF88",
-    "WARNING": "#FFC107",
-    "ERROR": "#FF4081",
+    "INFO": CYAN,
+    "SUCCESS": GREEN,
+    "WARNING": YELLOW,
+    "ERROR": PINK,
 }
 
 
@@ -40,9 +42,9 @@ def _app_icon_path() -> str:
 def main() -> None:
     """Запустить графическое приложение."""
     app = QApplication(sys.argv)
-    app.setApplicationName("YouTube Medialoader")
-    app.setApplicationVersion("0.2.0")
-    app.setOrganizationName("MindlessMuse666")
+    app.setApplicationName(constants.APP_NAME)
+    app.setApplicationVersion(constants.APP_VERSION)
+    app.setOrganizationName(constants.ORG_NAME)
 
     # Базовый шрифт приложения - чтобы Qt не ругался на Point size <= 0
     default_font = QFont("Press Start 2P", 10)
@@ -116,7 +118,7 @@ def _check_updates(window: MainWindow) -> None:
 
 def _on_log_message(level: str, text: str) -> None:
     """Обработчик сигнала лога - обновляет GUI в главном потоке."""
-    color = LOG_COLORS.get(level, "#CCCCCC")
+    color = LOG_COLORS.get(level, TEXT)
 
     # Ищем активное окно для обновления
     for widget in QApplication.topLevelWidgets():

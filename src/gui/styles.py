@@ -1,11 +1,9 @@
 """QSS-стили и загрузка шрифтов для неоновой темы YouTube Medialoader.
 
-Цветовая палитра:
-  - Фон: #0A0A0A
-  - Акцент-голубой: #00E5FF
-  - Акцент-розовый: #FF4081
-  - Текст: #FFFFFF
-  - Серый: #2A2A2A
+Цветовая палитра берeтся из :mod:`src.utils.theme` - единого источника
+HEX-цветов. В шаблоне :data:`_MAIN_QSS_TEMPLATE` вместо литералов стоят
+плейсхолдеры ``{CYAN}``, ``{BG}`` и т.п., которые подставляются в
+:func:`get_main_qss`.
 """
 
 from __future__ import annotations
@@ -15,6 +13,20 @@ from pathlib import Path
 from PySide6.QtGui import QFontDatabase
 
 from src.utils.file_utils import assets_dir
+from src.utils.theme import (
+    BG,
+    BG_BLACK,
+    BG_HOVER,
+    BORDER,
+    CYAN,
+    GRAY,
+    GRAY_DARKER,
+    GREEN,
+    PINK,
+    TEXT,
+    WHITE,
+    YELLOW,
+)
 
 # Семейство пиксельного шрифта - устанавливается в load_fonts()
 # Если Press Start 2P не загрузился, используется fallback "monospace"
@@ -55,14 +67,35 @@ def load_fonts() -> None:
         PIXEL_FONT_FAMILY = "monospace"
 
 
-def get_main_qss() -> str:
-    """Вернуть QSS-строку с корректным семейством пиксельного шрифта.
+# Плейсхолдеры цветов темы в шаблоне QSS: имя -> HEX из src.utils.theme.
+# PIXEL_FONT подставляется отдельно (значение меняется в load_fonts).
+_THEME_PLACEHOLDERS = {
+    "CYAN": CYAN,
+    "PINK": PINK,
+    "GREEN": GREEN,
+    "YELLOW": YELLOW,
+    "WHITE": WHITE,
+    "TEXT": TEXT,
+    "GRAY": GRAY,
+    "GRAY_DARKER": GRAY_DARKER,
+    "BORDER": BORDER,
+    "BG": BG,
+    "BG_HOVER": BG_HOVER,
+    "BG_BLACK": BG_BLACK,
+}
 
-    Подставляет :data:`PIXEL_FONT_FAMILY` в шаблон ``MAIN_QSS``,
-    чтобы избежать предупреждения ``QFont::setPointSize``, если
-    шрифт Press Start 2P не загружен.
+
+def get_main_qss() -> str:
+    """Вернуть QSS-строку с подставленными шрифтом и цветами темы.
+
+    Подставляет :data:`PIXEL_FONT_FAMILY` и HEX-цвета из :mod:`theme`
+    в шаблон ``_MAIN_QSS_TEMPLATE``, чтобы избежать предупреждения
+    ``QFont::setPointSize``, если шрифт Press Start 2P не загружен.
     """
-    return _MAIN_QSS_TEMPLATE.replace("{PIXEL_FONT}", PIXEL_FONT_FAMILY)
+    result = _MAIN_QSS_TEMPLATE.replace("{PIXEL_FONT}", PIXEL_FONT_FAMILY)
+    for name, color in _THEME_PLACEHOLDERS.items():
+        result = result.replace(f"{{{name}}}", color)
+    return result
 
 
 _MAIN_QSS_TEMPLATE = """
@@ -73,39 +106,39 @@ QMainWindow {
 
 QWidget {
     background-color: transparent;
-    color: #FFFFFF;
+    color: {WHITE};
     font-family: {PIXEL_FONT};
     font-size: 13px;
 }
 
 /* === Поля ввода === */
 QLineEdit {
-    background-color: #1A1A1A;
-    border: 1px solid #2A2A2A;
+    background-color: {BG};
+    border: 1px solid {BORDER};
     border-radius: 6px;
     padding: 8px 12px;
-    color: #FFFFFF;
+    color: {WHITE};
     font-size: 13px;
     min-height: 20px;
 }
 
 QComboBox {
-    background-color: #1A1A1A;
-    border: 1px solid #2A2A2A;
+    background-color: {BG};
+    border: 1px solid {BORDER};
     border-radius: 6px;
     padding: 8px 12px;
-    color: #FFFFFF;
+    color: {WHITE};
     font-size: 13px;
     min-height: 20px;
 }
 
 QLineEdit:hover, QComboBox:hover {
-    border: 1px solid #555555;
-    background-color: #1E1E1E;
+    border: 1px solid {GRAY_DARKER};
+    background-color: {BG_HOVER};
 }
 
 QLineEdit:focus, QComboBox:focus {
-    border: 1px solid #00E5FF;
+    border: 1px solid {CYAN};
 }
 
 /* QLineEdit#folderPath - стили по умолчанию */
@@ -121,31 +154,31 @@ QComboBox::down-arrow {
 }
 
 QComboBox QAbstractItemView {
-    background-color: #1A1A1A;
-    border: 1px solid #00E5FF;
+    background-color: {BG};
+    border: 1px solid {CYAN};
     outline: none;
     padding: 4px;
     font-size: 13px;
 }
 
 QComboBox QAbstractItemView::item {
-    color: #FFFFFF;
+    color: {WHITE};
     padding: 6px 10px;
     min-height: 24px;
     font-size: 13px;
 }
 
 QComboBox QAbstractItemView::item:selected {
-    background-color: #00E5FF;
-    color: #0A0A0A;
+    background-color: {CYAN};
+    color: {BG_BLACK};
 }
 
 /* === Область логов === */
 QTextEdit#logArea {
-    background-color: #1A1A1A;
-    border: 1px solid #2A2A2A;
+    background-color: {BG};
+    border: 1px solid {BORDER};
     border-radius: 6px;
-    color: #CCCCCC;
+    color: {TEXT};
     font-size: 12px;
     padding: 8px;
 }
@@ -159,37 +192,37 @@ QPushButton {
 QLabel#titleLabel {
     font-family: {PIXEL_FONT};
     font-size: 16pt;
-    color: #00E5FF;
+    color: {CYAN};
     font-weight: bold;
 }
 
 QLabel#subtitleLabel {
     font-family: {PIXEL_FONT};
     font-size: 9pt;
-    color: #FF4081;
+    color: {PINK};
     font-weight: bold;
 }
 
 /* === Информационные метки === */
 QLabel#infoLabel {
-    color: #AAAAAA;
+    color: {GRAY};
     font-size: 12px;
 }
 
 QLabel#videoTitle {
     font-size: 14px;
     font-weight: bold;
-    color: #FFFFFF;
+    color: {WHITE};
 }
 
 QLabel#videoDetail {
     font-size: 12px;
-    color: #AAAAAA;
+    color: {GRAY};
 }
 
 /* === Метка фиксированной ширины для выравнивания === */
 QLabel#fixedLabel {
-    color: #AAAAAA;
+    color: {GRAY};
     font-size: 12px;
     min-width: 115px;
     max-width: 115px;
@@ -198,7 +231,7 @@ QLabel#fixedLabel {
 
 /* === Группы === */
 QGroupBox {
-    border: 1px solid #2A2A2A;
+    border: 1px solid {BORDER};
     border-radius: 8px;
     margin-top: 32px;
     padding: 10px 12px 8px;
@@ -210,7 +243,7 @@ QGroupBox::title {
     padding: 0 8px;
     font-family: {PIXEL_FONT};
     font-size: 9pt;
-    color: #00E5FF;
+    color: {CYAN};
     font-weight: bold;
 }
 
@@ -218,7 +251,7 @@ QGroupBox::title {
 QPushButton#clearLogBtn, QPushButton#queueClearBtn {
     background-color: transparent;
     border: none;
-    color: #555555;
+    color: {GRAY_DARKER};
     font-size: 11px;
     min-height: 30px;
     padding: 4px 8px;
@@ -226,23 +259,23 @@ QPushButton#clearLogBtn, QPushButton#queueClearBtn {
 }
 
 QPushButton#clearLogBtn:hover, QPushButton#queueClearBtn:hover {
-    color: #FF4081;
+    color: {PINK};
 }
 
 /* === Кнопка "ИСТОРИЯ" === */
 QPushButton#historyBtn {
     background-color: transparent;
-    border: 1px solid #00FF88;
+    border: 1px solid {GREEN};
     border-radius: 4px;
     padding: 4px 12px;
     min-height: 30px;
-    color: #00FF88;
+    color: {GREEN};
     font-size: 11px;
 }
 
 QPushButton#historyBtn:hover {
     background-color: rgba(0, 255, 136, 0.1);
-    color: #00FF88;
+    color: {GREEN};
 }
 
 QPushButton:disabled {
@@ -251,7 +284,7 @@ QPushButton:disabled {
 
 /* === Разделитель === */
 QFrame#separator {
-    background-color: #2A2A2A;
+    background-color: {BORDER};
     max-height: 1px;
 }
 
@@ -265,7 +298,7 @@ QScrollArea {
 /* Горизонтальное центрирование задаётся в коде (setAlignment) - значение
    enum в qproperty с кавычками не применялось бы. */
 QLabel#progressStatus {
-    color: #AAAAAA;
+    color: {GRAY};
     font-size: 11px;
     padding: 0px;
     margin: 0px;

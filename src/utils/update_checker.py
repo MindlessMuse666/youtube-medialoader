@@ -7,14 +7,17 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, QUrl
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 
+from src.utils import constants
+
 # URL API GitHub для последнего релиза
 _GITHUB_API_URL = (
-    "https://api.github.com/repos/MindlessMuse666/youtube-medialoader/releases/latest"
+    f"https://api.github.com/repos/{constants.GITHUB_REPO}/releases/latest"
 )
 
 # Таймаут запроса (мс)
@@ -88,24 +91,28 @@ class UpdateChecker(QObject):
             self._reply.deleteLater()
             self._reply = None
 
+    # Числовая часть версии (``MAJOR[.MINOR[.PATCH]]``) внутри тега/версии
+    _NUMERIC_VERSION_RE = re.compile(r"\d+(?:\.\d+)*")
+
     def _is_newer_version(self, latest_tag: str) -> bool:
         """Сравнить версии (семантическое версионирование).
 
+        Устойчив к суффиксам в тегах: ``"v2.4-stable"`` парсится как ``2.4``,
+        а не падает на ``int("4-stable")``.
+
         Args:
-            latest_tag: Тег последнего релиза (например ``"v2.0-unstable"``).
+            latest_tag: Тег последнего релиза (например ``"v2.4-stable"``).
 
         Returns:
             ``True``, если latest_tag новее текущей версии.
         """
-        # Убираем префикс 'v' если есть
-        tag = latest_tag.lstrip("vV")
-        current = self._current_version.lstrip("vV")
-
-        try:
-            tag_parts = [int(x) for x in tag.split(".")]
-            current_parts = [int(x) for x in current.split(".")]
-        except (ValueError, AttributeError):
+        tag = self._extract_numeric_version(latest_tag)
+        current = self._extract_numeric_version(self._current_version)
+        if not tag or not current:
             return False
+
+        tag_parts = [int(x) for x in tag.split(".")]
+        current_parts = [int(x) for x in current.split(".")]
 
         # Дополняем списки до одинаковой длины нулями
         max_len = max(len(tag_parts), len(current_parts))
@@ -113,6 +120,19 @@ class UpdateChecker(QObject):
         current_parts += [0] * (max_len - len(current_parts))
 
         return tag_parts > current_parts
+
+    @staticmethod
+    def _extract_numeric_version(version: str) -> str:
+        """Выделить числовую часть версии (``"v2.4-stable"`` -> ``"2.4"``).
+
+        Args:
+            version: Сырой тег или версия (``"v2.4-stable"``, ``"2.3.0"``).
+
+        Returns:
+            Числовая часть ``MAJOR[.MINOR[.PATCH]]`` или ``""`` при её отсутствии.
+        """
+        match = UpdateChecker._NUMERIC_VERSION_RE.search(version or "")
+        return match.group(0) if match else ""
 
     def _emit_result(self, latest_tag: str, is_newer: bool) -> None:
         """Вызвать внешний колбэк с результатом проверки.

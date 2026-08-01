@@ -68,7 +68,14 @@ class AnimatedBackground(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
     def _step(self) -> None:
-        """Сдвинуть сферы и запросить перерисовку."""
+        """Сдвинуть сферы и запросить перерисовку.
+
+        Если виджет скрыт (свернут в трей/окно не показано), анимация
+        пропускается: не тратим CPU на пересчет и репаинт на 20 FPS.
+        """
+        if not self.isVisible():
+            return
+
         w = self.width()
         h = self.height()
         if w == 0 or h == 0:

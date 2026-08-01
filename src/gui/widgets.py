@@ -39,6 +39,16 @@ from PySide6.QtWidgets import (
 )
 
 from src.gui import styles as gui_styles
+from src.utils.theme import (
+    BG,
+    BORDER,
+    CYAN,
+    GRAY_DARKER,
+    GREEN,
+    PINK,
+    WHITE,
+    YELLOW,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -55,19 +65,19 @@ class NeonButton(QPushButton):
     Args:
         text: Текст на кнопке.
         parent: Родительский виджет.
-        accent_color: Основной цвет кнопки в HEX (по умолчанию ``#00E5FF``).
-            Для кнопки "Отмена" используйте ``"#FF4081"``.
+        accent_color: Основной цвет кнопки в HEX (по умолчанию ``theme.CYAN``).
+            Для кнопки "Отмена" используйте ``theme.PINK``.
     """
 
     def __init__(
         self,
         text: str = "",
         parent: QWidget | None = None,
-        accent_color: str = "#00E5FF",
+        accent_color: str = CYAN,
     ) -> None:
         super().__init__(text, parent)
         self._accent_color = accent_color
-        self._hover_color = "#FF4081"  # при наведении - розовый для всех
+        self._hover_color = PINK  # при наведении - розовый для всех
         self._glow_opacity: float = 0.0
         self._setup_ui()
 
@@ -104,8 +114,8 @@ class NeonButton(QPushButton):
                 background-color: rgba({self._parse_hex(accent)}, 0.15);
             }}
             QPushButton:disabled {{
-                border-color: #2A2A2A;
-                color: #555555;
+                border-color: {BORDER};
+                color: {GRAY_DARKER};
             }}
         """)
 
@@ -176,7 +186,7 @@ class NeonProgressBar(QWidget):
     и центрированный текст. Заполнение анимируется (OutCubic, 400 мс).
     При вызове :meth:`complete` значение доводится до 100%, заливка плавно
     (через полупрозрачную розовую подложку) становится сплошного цвета
-    ``#FF4081``, а текст меняется на "ЗАВЕРШЕНО!".
+    ``theme.PINK``, а текст меняется на "ЗАВЕРШЕНО!".
 
     Пример использования::
 
@@ -185,18 +195,18 @@ class NeonProgressBar(QWidget):
         progress.complete()      # плавно завершить: розовый + "ЗАВЕРШЕНО!"
     """
 
-    # Палитра (согласована с основной темой)
-    _COLOR_FROM = QColor("#00E5FF")
-    _COLOR_TO = QColor("#FF4081")
-    _DONE_COLOR = QColor("#FF4081")
-    _BG_COLOR = QColor("#1A1A1A")
-    _BORDER_COLOR = QColor("#2A2A2A")
-    _TEXT_COLOR = QColor("#FFFFFF")
+    # Палитра - из единого источника src.utils.theme
+    _COLOR_FROM = QColor(CYAN)
+    _COLOR_TO = QColor(PINK)
+    _DONE_COLOR = QColor(PINK)
+    _BG_COLOR = QColor(BG)
+    _BORDER_COLOR = QColor(BORDER)
+    _TEXT_COLOR = QColor(WHITE)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._value: float = 0.0
-        self._mix: float = 0.0  # 0..1: переход заливки к сплошному #FF4081
+        self._mix: float = 0.0  # 0..1: переход заливки к сплошному PINK
         self._completed: bool = False
         self._fill_anim: QVariantAnimation | None = None
         self._mix_anim: QVariantAnimation | None = None
@@ -230,7 +240,7 @@ class NeonProgressBar(QWidget):
         self._start_fill_anim(float(max(0, min(value, 100))), duration)
 
     def complete(self, duration: int = 400) -> None:
-        """Плавно завершить: довести до 100% и сменить заливку на #FF4081.
+        """Плавно завершить: довести до 100% и сменить заливку на PINK.
 
         Текст при этом меняется на "ЗАВЕРШЕНО!". Плавность достигается
         параллельной анимацией ``_mix`` (0 -> 1).
@@ -352,7 +362,7 @@ class NeonProgressBar(QWidget):
             painter.setBrush(gradient)
             painter.drawRoundedRect(fill, radius, radius)
 
-            # Плавный переход к сплошному #FF4081 при завершении
+            # Плавный переход к сплошному PINK при завершении
             if self._mix > 0.0:
                 overlay = QColor(self._DONE_COLOR)
                 overlay.setAlpha(int(255 * self._mix))
@@ -390,7 +400,7 @@ class LoadingSpinner(QLabel):
         self._index: int = 0
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
-        self.setStyleSheet("color: #00E5FF; font-size: 18px; background: transparent;")
+        self.setStyleSheet(f"color: {CYAN}; font-size: 18px; background: transparent;")
         self.hide()
 
     def start(self) -> None:
@@ -429,10 +439,10 @@ class Toast(QWidget):
         - ``Toast.WARNING`` - жeлтый
     """
 
-    INFO = "#00E5FF"
-    SUCCESS = "#00FF88"
-    ERROR = "#FF4081"
-    WARNING = "#FFC107"
+    INFO = CYAN
+    SUCCESS = GREEN
+    ERROR = PINK
+    WARNING = YELLOW
 
     TOAST_DURATION_MS = 3000
 
@@ -483,7 +493,7 @@ class Toast(QWidget):
 
         # Текст
         text_label = QLabel(text)
-        text_label.setStyleSheet("color: #FFFFFF; font-size: 12px; background: transparent;")
+        text_label.setStyleSheet(f"color: {WHITE}; font-size: 12px; background: transparent;")
         text_label.setWordWrap(True)
         layout.addWidget(text_label, 1)
 

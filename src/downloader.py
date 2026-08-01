@@ -13,7 +13,11 @@ from typing import Any, Callable, Optional
 import yt_dlp
 from yt_dlp.utils import DownloadError
 
-from src.utils.file_utils import sanitize_filename
+from src.utils.file_utils import (
+    _split_ext,
+    resolve_filename,
+    sanitize_filename,
+)
 
 
 class YouTubeDownloader:
@@ -111,13 +115,8 @@ class YouTubeDownloader:
             yt_dlp.utils.DownloadError: Если URL некорректен или видео
                 недоступно.
         """
-        cookie_browsers = (
-            cookies_from_browser
-            if cookies_from_browser is not None
-            else self._cookies_from_browser
-        )
-        cookie_file = (
-            cookies_file if cookies_file is not None else self._cookies_file
+        cookie_browsers, cookie_file = self._resolve_cookies(
+            cookies_from_browser, cookies_file
         )
 
         opts = self._base_opts()
@@ -125,17 +124,7 @@ class YouTubeDownloader:
         if had_cookies:
             self._apply_cookie_opts(opts, cookie_browsers, cookie_file)
 
-        try:
-            info = self._extract(url, opts)
-        except DownloadError:
-            # Если использовали куки - пробуем без них
-            if had_cookies:
-                opts.pop("cookiesfrombrowser", None)
-                opts.pop("cookiefile", None)
-                info = self._extract(url, opts)
-            else:
-                # Без кук - нечего повторять, пробрасываем ошибку
-                raise
+        info = self._extract_with_cookie_fallback(url, opts, had_cookies)
 
         return self._normalize_info(info)
 
@@ -232,13 +221,8 @@ class YouTubeDownloader:
         out_name = self._resolve_out_name(filename, format_type)
         outtmpl = os.path.join(output_path, out_name)
 
-        cookie_browsers = (
-            cookies_from_browser
-            if cookies_from_browser is not None
-            else self._cookies_from_browser
-        )
-        cookie_file = (
-            cookies_file if cookies_file is not None else self._cookies_file
+        cookie_browsers, cookie_file = self._resolve_cookies(
+            cookies_from_browser, cookies_file
         )
 
         ydl_opts = self._build_opts(
@@ -253,8 +237,7 @@ class YouTubeDownloader:
             self._apply_cookie_opts(ydl_opts, cookie_browsers, cookie_file)
 
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
+            self._download_once(ydl_opts, url)
         except DownloadError:
             if self._cancel_event and self._cancel_event.is_set():
                 # yt-dlp оставляет .part-файлы для возобновления (resume);
@@ -262,12 +245,12 @@ class YouTubeDownloader:
                 self._cleanup_partial_files(outtmpl)
                 raise
 
-            # Если использовали куки - пробуем без них
+            # Если использовали куки - пробуем без них. Повтор идёт с копией
+            # словаря опций, чтобы не мутировать исходный ydl_opts.
             if had_cookies:
-                ydl_opts.pop("cookiesfrombrowser", None)
-                ydl_opts.pop("cookiefile", None)
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url])
+                retry_opts = dict(ydl_opts)
+                self._remove_cookie_opts(retry_opts)
+                self._download_once(retry_opts, url)
             else:
                 # Без кук - нечего повторять, пробрасываем исходную ошибку
                 raise
@@ -295,10 +278,10 @@ class YouTubeDownloader:
             Имя для шаблона вывода без абсолютного пути.
         """
         safe = sanitize_filename(filename)
-        base, _ext = os.path.splitext(safe)
         if format_type == "mp3":
+            base, _ext = _split_ext(safe)
             return base
-        return f"{base}.mp4"
+        return resolve_filename(filename, "mp4")
 
     @staticmethod
     def _cleanup_partial_files(outtmpl: str) -> None:
@@ -353,6 +336,82 @@ class YouTubeDownloader:
         except OSError:
             pass
 
+    def _resolve_cookies(
+        self,
+        cookies_from_browser: Optional[tuple[str, ...]],
+        cookies_file: Optional[str],
+    ) -> tuple[Optional[tuple[str, ...]], Optional[str]]:
+        """Выбрать куки: явные параметры или значения из конструктора.
+
+        Явно переданные в вызов аргументы имеют приоритет над значениями
+        из конструктора (``None`` означает "не переопределяли").
+
+        Args:
+            cookies_from_browser: Браузеры из аргументов вызова.
+            cookies_file: Путь к файлу кук из аргументов вызова.
+
+        Returns:
+            Кортеж ``(cookie_browsers, cookie_file)``, готовый к использованию.
+        """
+        return (
+            (
+                cookies_from_browser
+                if cookies_from_browser is not None
+                else self._cookies_from_browser
+            ),
+            (
+                cookies_file
+                if cookies_file is not None
+                else self._cookies_file
+            ),
+        )
+
+    @staticmethod
+    def _remove_cookie_opts(opts: dict[str, Any]) -> None:
+        """Убрать опции кук из словаря опций yt-dlp (in-place).
+
+        Используется для повторной попытки без кук, когда запрос с куками
+        упал (см. :meth:`_extract_with_cookie_fallback`).
+
+        Args:
+            opts: Словарь опций yt-dlp.
+        """
+        opts.pop("cookiesfrombrowser", None)
+        opts.pop("cookiefile", None)
+
+    def _extract_with_cookie_fallback(
+        self,
+        url: str,
+        opts: dict[str, Any],
+        had_cookies: bool,
+    ) -> Any:
+        """Извлечь информацию, повторив попытку без кук при ошибке.
+
+        Если куки использовались и запрос упал - удаляет опции кук и
+        пробует ещё раз. Без кук ошибка пробрасывается сразу.
+
+        Args:
+            url: Ссылка на видео.
+            opts: Словарь опций для YoutubeDL.
+            had_cookies: Использовались ли куки в первой попытке.
+
+        Returns:
+            Информация о видео от yt-dlp.
+
+        Raises:
+            yt_dlp.utils.DownloadError: Если обе попытки не удались.
+        """
+        try:
+            return self._extract(url, opts)
+        except DownloadError:
+            if not had_cookies:
+                raise
+            # Повтор идёт с копией словаря, чтобы не мутировать исходный opts
+            # (первая попытка должна сохранить опции кук для проверок/логов).
+            retry_opts = dict(opts)
+            self._remove_cookie_opts(retry_opts)
+            return self._extract(url, retry_opts)
+
     @staticmethod
     def _extract(url: str, opts: Any) -> Any:
         """Извлечь информацию о видео через yt-dlp.
@@ -372,6 +431,20 @@ class YouTubeDownloader:
         """
         with yt_dlp.YoutubeDL(opts) as ydl:
             return ydl.extract_info(url, download=False)
+
+    @staticmethod
+    def _download_once(opts: Any, url: str) -> None:
+        """Выполнить один проход загрузки через yt-dlp.
+
+        Args:
+            opts: Словарь опций для YoutubeDL.
+            url: Ссылка на видео.
+
+        Raises:
+            yt_dlp.utils.DownloadError: Если загрузка не удалась.
+        """
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
 
     @staticmethod
     def _base_opts() -> dict[str, Any]:
