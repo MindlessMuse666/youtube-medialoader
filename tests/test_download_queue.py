@@ -8,9 +8,14 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QLabel, QWidget
 
-from src.gui.download_queue import DownloadQueueWidget, QueueItem, QueueItemStatus
+from src.gui.download_queue import (
+    DownloadQueueWidget,
+    QueueItem,
+    QueueItemStatus,
+    _format_details,
+)
 
 
 def make_item(**overrides: object) -> QueueItem:
@@ -163,3 +168,68 @@ class TestQueueDynamicHeight:
         queue.mark_downloading(item)
         queue.mark_completed(item)
         assert queue._scroll.maximumHeight() == height_before
+
+
+class TestQueueVerticalCentering:
+    """Блок строк очереди центрируется по вертикали между двумя упорами."""
+
+    def test_rows_sandwiched_between_stretches(
+        self, queue: DownloadQueueWidget
+    ) -> None:
+        """Строки лежат между двумя упорами (индекс 0 и последний)."""
+        queue.add_item(make_item())
+        queue.add_item(make_item())
+        layout = queue._list_layout
+        assert layout.count() == 4
+        assert layout.itemAt(0).spacerItem() is not None
+        assert layout.itemAt(1).widget() is not None
+        assert layout.itemAt(2).widget() is not None
+        assert layout.itemAt(3).spacerItem() is not None
+
+    def test_clear_keeps_two_stretches(self, queue: DownloadQueueWidget) -> None:
+        """После очистки завершённых упоры сохраняются."""
+        item = make_item()
+        queue.add_item(item)
+        queue.mark_completed(item)
+        queue._clear_completed()
+        layout = queue._list_layout
+        assert layout.count() == 2
+        assert layout.itemAt(0).spacerItem() is not None
+        assert layout.itemAt(1).spacerItem() is not None
+
+
+class TestQueueItemDetails:
+    """Строка деталей формата/качества в записи очереди.
+
+    Качество отображается только для видео: для MP3 выводится лишь
+    расширение, без бессмысленного ``| 720p``.
+    """
+
+    def test_mp4_shows_quality(self) -> None:
+        assert _format_details("mp4", "1080p") == "MP4 | 1080p"
+
+    def test_mp3_omits_quality(self) -> None:
+        assert _format_details("mp3", "720p") == "MP3"
+
+    def test_format_type_case_insensitive(self) -> None:
+        assert _format_details("MP3", "1080p") == "MP3"
+        assert _format_details("MP4", "720p") == "MP4 | 720p"
+
+    def test_mp3_widget_hides_quality(self, queue: DownloadQueueWidget) -> None:
+        """В записи MP3 качество не отображается."""
+        queue.add_item(make_item(format_type="mp3", quality="720p"))
+        # itemAt(1): первая строка между двумя упорами (см. TestQueueVerticalCentering)
+        labels = [
+            lbl.text()
+            for lbl in queue._list_layout.itemAt(1).widget().findChildren(QLabel)
+        ]
+        assert "720p" not in " ".join(labels)
+
+    def test_mp4_widget_shows_quality(self, queue: DownloadQueueWidget) -> None:
+        """В записи MP4 качество отображается."""
+        queue.add_item(make_item(format_type="mp4", quality="1080p"))
+        labels = [
+            lbl.text()
+            for lbl in queue._list_layout.itemAt(1).widget().findChildren(QLabel)
+        ]
+        assert "1080p" in " ".join(labels)

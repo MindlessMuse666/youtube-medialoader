@@ -7,6 +7,7 @@ import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
+from yt_dlp.utils import DownloadError
 
 from src.downloader import YouTubeDownloader
 
@@ -243,7 +244,7 @@ class TestDownload:
 
 
 class TestResolveOutName:
-    """outtmpl не должен давать двойное расширение (баг «.mp3.mp3»)."""
+    """outtmpl не должен давать двойное расширение (баг ".mp3.mp3")."""
 
     def test_mp3_omits_extension(self, downloader: YouTubeDownloader) -> None:
         """Для mp3 в шаблоне вывода расширение не указывается."""
@@ -264,3 +265,75 @@ class TestResolveOutName:
     def test_sanitizes_invalid_chars(self, downloader: YouTubeDownloader) -> None:
         """Недопустимые символы очищаются до построения шаблона."""
         assert downloader._resolve_out_name('A:B"C?', "mp3") == "A_B_C_"
+
+
+# ---------------------------------------------------------------------------
+# Удаление .part-файлов после отмены (баг 1)
+# ---------------------------------------------------------------------------
+
+
+class TestPartialCleanup:
+    """Частично скачанные файлы удаляются после отмены, готовые - сохраняются."""
+
+    def test_removes_part_and_merge_intermediates(self, tmp_path) -> None:
+        """Удаляются .part-файлы и промежуточные файлы слияния."""
+        target = tmp_path / "video.mp4"
+        part = tmp_path / "video.mp4.part"
+        intermediate = tmp_path / "video.mp4.f137.mp4"
+        part.write_bytes(b"partial")
+        intermediate.write_bytes(b"stream")
+        completed = tmp_path / "video.mp4"
+        completed.write_bytes(b"done")
+
+        YouTubeDownloader._cleanup_partial_files(str(target))
+
+        assert not part.exists()
+        assert not intermediate.exists()
+        assert completed.exists()
+
+    def test_mp3_removes_stream_part_keeps_final(self, tmp_path) -> None:
+        """Для mp3 удаляется <имя>.m4a.part, а готовый <имя>.mp3 сохраняется."""
+        target = tmp_path / "My Song"
+        part = tmp_path / "My Song.m4a.part"
+        part.write_bytes(b"partial")
+        final = tmp_path / "My Song.mp3"
+        final.write_bytes(b"done")
+
+        YouTubeDownloader._cleanup_partial_files(str(target))
+
+        assert not part.exists()
+        assert final.exists()
+
+    def test_unrelated_files_untouched(self, tmp_path) -> None:
+        """Файлы, не связанные с шаблоном вывода, не удаляются."""
+        target = tmp_path / "video.mp4"
+        other = tmp_path / "other.mp4.part"
+        other.write_bytes(b"partial")
+
+        YouTubeDownloader._cleanup_partial_files(str(target))
+
+        assert other.exists()
+
+    @patch("yt_dlp.YoutubeDL")
+    def test_cancel_removes_part_file_and_raises(
+        self, mock_ydl_cls: MagicMock, downloader: YouTubeDownloader, tmp_path
+    ) -> None:
+        """При отмене .part-файл удаляется, а DownloadError пробрасывается."""
+        mock_ydl = MagicMock()
+        mock_ydl_cls.return_value.__enter__.return_value = mock_ydl
+        mock_ydl.download.side_effect = DownloadError("Отменено пользователем")
+
+        cancel = threading.Event()
+        cancel.set()
+        part = tmp_path / "video.mp4.part"
+        part.write_bytes(b"partial")
+
+        with pytest.raises(DownloadError):
+            downloader.download(
+                url="https://youtube.com/watch?v=test",
+                output_path=str(tmp_path),
+                filename="video.mp4",
+                cancel_event=cancel,
+            )
+
+        assert not part.exists()

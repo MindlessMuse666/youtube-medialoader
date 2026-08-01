@@ -3,6 +3,7 @@
 import os
 
 from src.utils.file_utils import (
+    _shell_select_file,
     resolve_filename,
     resolve_output_path,
     reveal_in_file_manager,
@@ -110,14 +111,17 @@ class TestResolveFilename:
 class TestRevealInFileManager:
     """Тесты для :func:`reveal_in_file_manager`.
 
-    Проверяют, что существующий файл передаётся Explorer с префиксом
-    ``/n,/select,`` (новое окно с выделением), а папка/родитель удалeнного
-    файла - как обычный аргумент пути. Запуск Explorer мокается.
+    Основной способ выделения файла/папки - Windows Shell API (устойчив
+    к спецсимволам в имени). ``explorer.exe`` используется только как
+    фолбэк. Проверяем оба пути: при доступном Shell API Explorer не
+    запускается, а при недоступном - запускается с корректными аргументами.
+    Запуск Explorer и вызовы Shell API мокаются.
     """
 
     def test_existing_file_selects_in_new_explorer_window(
         self, tmp_path, monkeypatch
     ) -> None:
+        """Фолбэк: файл передаётся Explorer с ``/n,/select,`` (новое окно)."""
         monkeypatch.setattr("src.utils.file_utils.sys.platform", "win32")
         target = tmp_path / "video.mp4"
         target.write_bytes(b"data")
@@ -126,22 +130,65 @@ class TestRevealInFileManager:
             "src.utils.file_utils.subprocess.Popen",
             lambda *args, **kwargs: calls.append(args) or True,
         )
+        monkeypatch.setattr(
+            "src.utils.file_utils._shell_select_file", lambda *_: False
+        )
 
         assert reveal_in_file_manager(str(target))
         assert calls == [(["explorer", "/n,/select," + str(target)],)]
 
+    def test_existing_file_uses_shell_api(self, tmp_path, monkeypatch) -> None:
+        """Если Shell API доступен, explorer.exe не запускается."""
+        monkeypatch.setattr("src.utils.file_utils.sys.platform", "win32")
+        target = tmp_path / "video.mp4"
+        target.write_bytes(b"data")
+        calls: list[tuple] = []
+        monkeypatch.setattr(
+            "src.utils.file_utils.subprocess.Popen",
+            lambda *args, **kwargs: calls.append(args) or True,
+        )
+        shell_calls: list[tuple] = []
+        monkeypatch.setattr(
+            "src.utils.file_utils._shell_select_file",
+            lambda d, f: shell_calls.append((d, f)) or True,
+        )
+
+        assert reveal_in_file_manager(str(target))
+        assert shell_calls == [(str(tmp_path), "video.mp4")]
+        assert calls == []
+
     def test_existing_folder_opens_in_explorer(self, tmp_path, monkeypatch) -> None:
+        """Фолбэк: папка передаётся Explorer как обычный аргумент пути."""
         monkeypatch.setattr("src.utils.file_utils.sys.platform", "win32")
         calls: list[tuple] = []
         monkeypatch.setattr(
             "src.utils.file_utils.subprocess.Popen",
             lambda *args, **kwargs: calls.append(args) or True,
         )
+        monkeypatch.setattr(
+            "src.utils.file_utils._shell_open_folder", lambda *_: False
+        )
 
         assert reveal_in_file_manager(str(tmp_path))
         assert calls == [(["explorer", str(tmp_path)],)]
 
+    def test_existing_folder_uses_shell_api(self, tmp_path, monkeypatch) -> None:
+        """Папка тоже открывается через Shell API, Explorer не нужен."""
+        monkeypatch.setattr("src.utils.file_utils.sys.platform", "win32")
+        calls: list[tuple] = []
+        monkeypatch.setattr(
+            "src.utils.file_utils.subprocess.Popen",
+            lambda *args, **kwargs: calls.append(args) or True,
+        )
+        monkeypatch.setattr(
+            "src.utils.file_utils._shell_open_folder", lambda *_: True
+        )
+
+        assert reveal_in_file_manager(str(tmp_path))
+        assert calls == []
+
     def test_missing_file_opens_parent_folder(self, tmp_path, monkeypatch) -> None:
+        """Удалeнный файл: открывается его родительская папка."""
         monkeypatch.setattr("src.utils.file_utils.sys.platform", "win32")
         missing = tmp_path / "gone.mp4"
         calls: list[tuple] = []
@@ -149,10 +196,96 @@ class TestRevealInFileManager:
             "src.utils.file_utils.subprocess.Popen",
             lambda *args, **kwargs: calls.append(args) or True,
         )
+        monkeypatch.setattr(
+            "src.utils.file_utils._shell_open_folder", lambda *_: False
+        )
 
         assert reveal_in_file_manager(str(missing))
         assert calls == [(["explorer", str(tmp_path)],)]
 
+    def test_missing_file_with_missing_parent_returns_false(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Если и файла, и родительской папки нет - ничего не открываем."""
+        monkeypatch.setattr("src.utils.file_utils.sys.platform", "win32")
+        calls: list[tuple] = []
+        monkeypatch.setattr(
+            "src.utils.file_utils.subprocess.Popen",
+            lambda *args, **kwargs: calls.append(args) or True,
+        )
+
+        missing = tmp_path / "no" / "such" / "file.mp4"
+        assert reveal_in_file_manager(str(missing)) is False
+        assert calls == []
+
     def test_non_windows_returns_false(self, monkeypatch) -> None:
         monkeypatch.setattr("src.utils.file_utils.sys.platform", "linux")
         assert reveal_in_file_manager("whatever") is False
+
+    def test_file_select_without_create_no_window_flag(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Explorer (фолбэк) не должен запускаться с CREATE_NO_WINDOW (иначе открывает "Документы")."""
+        monkeypatch.setattr("src.utils.file_utils.sys.platform", "win32")
+        target = tmp_path / "video.mp4"
+        target.write_bytes(b"data")
+        calls: list[tuple] = []
+        monkeypatch.setattr(
+            "src.utils.file_utils.subprocess.Popen",
+            lambda *args, **kwargs: calls.append((args, kwargs)) or True,
+        )
+        monkeypatch.setattr(
+            "src.utils.file_utils._shell_select_file", lambda *_: False
+        )
+
+        reveal_in_file_manager(str(target))
+
+        assert calls
+        _, kwargs = calls[0]
+        assert kwargs.get("creationflags") is None
+
+    def test_special_chars_passed_verbatim_to_shell(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Имя со спецсимволами (&, —, CJK) передаётся в Shell API как есть."""
+        monkeypatch.setattr("src.utils.file_utils.sys.platform", "win32")
+        filename = "MASA WORKS DESIGN - 春またいつか ft.初音ミク&鏡音リン.mp4"
+        target = tmp_path / filename
+        target.write_bytes(b"data")
+        shell_calls: list[tuple] = []
+        monkeypatch.setattr(
+            "src.utils.file_utils._shell_select_file",
+            lambda d, f: shell_calls.append((d, f)) or False,
+        )
+
+        reveal_in_file_manager(str(target))
+
+        assert shell_calls == [(str(tmp_path), filename)]
+
+    def test_special_chars_fallback_to_explorer(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Фолбэк explorer получает имя со спецсимволами без изменений."""
+        monkeypatch.setattr("src.utils.file_utils.sys.platform", "win32")
+        filename = "Френдзона — Молодость.mp4"
+        target = tmp_path / filename
+        target.write_bytes(b"data")
+        calls: list[tuple] = []
+        monkeypatch.setattr(
+            "src.utils.file_utils.subprocess.Popen",
+            lambda *args, **kwargs: calls.append(args) or True,
+        )
+        monkeypatch.setattr(
+            "src.utils.file_utils._shell_select_file", lambda *_: False
+        )
+
+        assert reveal_in_file_manager(str(target))
+        assert calls == [(["explorer", "/n,/select," + str(target)],)]
+
+    def test_shell_select_file_missing_path_returns_false(self) -> None:
+        """Несуществующий путь: Shell API не открывает окно и возвращает False.
+
+        На Windows ``SHParseDisplayName`` завершится ошибкой, на других
+        платформах ``ctypes.windll`` недоступен - в обоих случаях ``False``.
+        """
+        assert _shell_select_file("C:/definitely/not/here", "x.mp4") is False

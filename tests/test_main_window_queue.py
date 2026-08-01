@@ -10,12 +10,11 @@ from __future__ import annotations
 import threading
 from unittest.mock import MagicMock, patch
 
-import pytest
-from PySide6.QtCore import QObject, QThread, Signal
-from PySide6.QtWidgets import QSystemTrayIcon
+from PySide6.QtCore import QObject, Qt, QThread, Signal
 
 from src.gui.download_queue import QueueItem, QueueItemStatus
-from src.gui.main_window import MainWindow
+
+_URL = "https://youtube.com/watch?v=test"
 
 
 class FakeWorker(QObject):
@@ -42,30 +41,6 @@ def make_item(**overrides: object) -> QueueItem:
     }
     data.update(overrides)
     return QueueItem(**data)  # type: ignore[arg-type]
-
-
-@pytest.fixture
-def main_window(qapp) -> MainWindow:
-    """MainWindow с изолированными настройками и без побочных эффектов.
-
-    Патчи сохраняются на время теста: QSettings возвращает пустые настройки,
-    трей и анимированный фон отключены, тосты заглушены, история - мок.
-    """
-    with (
-        patch("src.gui.main_window.QSettings") as mock_settings,
-        patch.object(QSystemTrayIcon, "isSystemTrayAvailable", return_value=False),
-        patch("src.gui.main_window.AnimatedBackground"),
-        patch.object(MainWindow, "show_toast"),
-    ):
-        settings = MagicMock()
-        settings.value.return_value = None
-        mock_settings.return_value = settings
-
-        window = MainWindow()
-        window._history_manager = MagicMock()  # не пишем в реальный файл истории
-        yield window
-        window.deleteLater()
-        qapp.processEvents()
 
 
 class TestCleanupDownload:
@@ -265,7 +240,7 @@ class TestProgressResetOnNewDownload:
 
 
 class TestDownloadButtonVisibility:
-    """Кнопка «СКАЧАТЬ» скрывается на время активной загрузки."""
+    """Кнопка "СКАЧАТЬ" скрывается на время активной загрузки."""
 
     def test_download_btn_hidden_during_download(
         self, main_window: MainWindow
@@ -287,12 +262,15 @@ class TestDownloadButtonVisibility:
 
     def test_download_btn_shown_when_queue_empty(self, main_window: MainWindow) -> None:
         main_window.download_btn.setVisible(False)  # как будто шла загрузка
+        main_window.url_input.setText(_URL)
+        main_window._current_video_title = "Test Video"
+        main_window._current_video_url = _URL
         main_window._process_queue()
         assert not main_window.download_btn.isHidden()
 
 
 class TestOpenFolderButtonReset:
-    """Кнопка «ОТКРЫТЬ ПАПКУ» должна скрываться при вводе новой ссылки."""
+    """Кнопка "ОТКРЫТЬ ПАПКУ" должна скрываться при вводе новой ссылки."""
 
     def test_url_entry_hides_open_folder_button(
         self, main_window: MainWindow
@@ -356,17 +334,23 @@ class TestTrayMessageOpen:
     def test_finished_captures_notify_path(
         self, main_window: MainWindow, tmp_path
     ) -> None:
-        """После успешной загрузки путь сохраняется для клика по уведомлению."""
+        """Путь для уведомления берётся из завершённого элемента очереди.
+
+        Глобальный ``_last_download_path`` к моменту завершения мог быть
+        перезаписан новым "СКАЧАТЬ"/стартом следующего элемента - поэтому
+        путь считается из самого элемента (баг 3).
+        """
         target = tmp_path / "video.mp4"
         target.write_bytes(b"data")
         main_window._process_queue = MagicMock()
-        item = make_item()
+        item = make_item(output_path=str(tmp_path), filename="video.mp4")
         main_window._queue_widget.add_item(item)
         main_window._current_queue_item = item
         worker = FakeWorker()
         main_window._download_worker = worker
         main_window._download_thread = None
-        main_window._last_download_path = str(target)
+        # "Загрязняем" глобальный путь: его перезаписала предыдущая загрузка.
+        main_window._last_download_path = str(tmp_path / "other.mp4")
         tray = MagicMock()
         main_window._tray_icon = tray
 
@@ -375,3 +359,215 @@ class TestTrayMessageOpen:
 
         tray.showMessage.assert_called_once()
         assert main_window._notify_path == str(target)
+
+    def test_open_folder_uses_last_completed_path(
+        self, main_window: MainWindow, tmp_path
+    ) -> None:
+        """Кнопка "ОТКРЫТЬ ПАПКУ" открывает последний завершённый файл.
+
+        Путь не должен перезаписываться следующим элементом очереди.
+        """
+        target = tmp_path / "video.mp4"
+        target.write_bytes(b"data")
+        main_window._process_queue = MagicMock()
+        item = make_item(output_path=str(tmp_path), filename="video.mp4")
+        main_window._queue_widget.add_item(item)
+        main_window._current_queue_item = item
+        worker = FakeWorker()
+        main_window._download_worker = worker
+        main_window._download_thread = None
+        main_window._last_download_path = str(tmp_path / "other.mp4")
+        main_window._tray_icon = None
+
+        worker.finished.connect(main_window._on_download_finished)
+        worker.finished.emit()
+
+        with patch("src.gui.main_window.reveal_in_file_manager") as mock_reveal:
+            main_window._on_open_folder_clicked()
+        mock_reveal.assert_called_once_with(str(target))
+
+    def test_history_records_completed_path(
+        self, main_window: MainWindow, tmp_path
+    ) -> None:
+        """В историю попадает путь завершённого файла, а не глобальный."""
+        target = tmp_path / "song.mp3"
+        target.write_bytes(b"data")
+        main_window._process_queue = MagicMock()
+        item = make_item(
+            output_path=str(tmp_path),
+            filename="song.mp3",
+            format_type="mp3",
+            title="Song",
+        )
+        main_window._queue_widget.add_item(item)
+        main_window._current_queue_item = item
+        worker = FakeWorker()
+        main_window._download_worker = worker
+        main_window._download_thread = None
+        main_window._last_download_path = str(tmp_path / "other.mp3")
+        main_window._tray_icon = None
+
+        worker.finished.connect(main_window._on_download_finished)
+        worker.finished.emit()
+
+        entry = main_window._history_manager.add.call_args[0][0]
+        assert entry.file_path == str(target)
+
+    def test_queue_start_does_not_overwrite_last_completed_path(
+        self, main_window: MainWindow
+    ) -> None:
+        """Старт новой загрузки не трогает путь последнего завершённого файла."""
+        main_window._last_download_path = "C:/Downloads/done.mp4"
+        with (
+            patch("src.gui.main_window.QThread") as mock_thread_cls,
+            patch("src.gui.main_window.DownloadWorker") as mock_worker_cls,
+        ):
+            mock_thread_cls.return_value = MagicMock()
+            mock_worker_cls.return_value = MagicMock()
+            main_window._queue_widget.add_item(
+                make_item(output_path="C:/Downloads", filename="next.mp4")
+            )
+            main_window._download_thread = None
+            main_window._process_queue()
+
+        assert main_window._last_download_path == "C:/Downloads/done.mp4"
+
+
+class TestProgressStatusLabel:
+    """Строка статуса под прогресс-баром (баг "стили прогресс-бара съехали").
+
+    Пустая метка скрывается, чтобы не резервировать строку между прогресс-баром
+    и кнопками; непустая - показывается и центрируется по горизонтали, как
+    текст самого прогресс-бара.
+    """
+
+    def test_empty_status_hides_label(self, main_window: MainWindow) -> None:
+        """Пустая строка статуса прячет метку - она не занимает места."""
+        main_window._set_progress_status("")
+        assert main_window._progress_status_label.isHidden()
+
+    def test_nonempty_status_shows_label(self, main_window: MainWindow) -> None:
+        """Во время загрузки строка статуса появляется со своим текстом."""
+        text = "10.0MB / 100.0MB  |  5MB/s  |  осталось 00:30"
+        main_window._set_progress_status(text)
+        assert not main_window._progress_status_label.isHidden()
+        assert main_window._progress_status_label.text() == text
+
+    def test_status_hidden_again_after_clear(self, main_window: MainWindow) -> None:
+        """После очистки метка снова скрывается (кнопки прижимаются к бару)."""
+        main_window._set_progress_status("что-то")
+        main_window._set_progress_status("")
+        assert main_window._progress_status_label.isHidden()
+
+    def test_label_centered_horizontally(self, main_window: MainWindow) -> None:
+        """Текст статуса центрируется, как и текст прогресс-бара."""
+        flags = main_window._progress_status_label.alignment()
+        assert flags & Qt.AlignmentFlag.AlignHCenter
+
+    def test_label_hidden_by_default(self, main_window: MainWindow) -> None:
+        """При старте пустая метка скрыта - кнопки не съезжают вниз."""
+        assert main_window._progress_status_label.isHidden()
+
+
+class TestDownloadButtonHiddenAfterSuccess:
+    """Кнопка "СКАЧАТЬ" скрывается после успешной загрузки до смены параметров.
+
+    Скачанный файл незачем качать повторно: кнопка не появляется, пока входные
+    параметры (ссылка, тип, качество) не изменились.
+    """
+
+    def _finish_download(self, main_window: MainWindow) -> None:
+        """Довести одну загрузку до успешного завершения (сигнал finished)."""
+        main_window._process_queue = MagicMock()
+        item = make_item()
+        main_window._queue_widget.add_item(item)
+        main_window._current_queue_item = item
+        worker = FakeWorker()
+        main_window._download_worker = worker
+        main_window._download_thread = None
+        main_window._tray_icon = None
+        worker.finished.connect(main_window._on_download_finished)
+        worker.finished.emit()
+
+    def test_success_hides_button_even_with_info(
+        self, main_window: MainWindow
+    ) -> None:
+        """После успеха кнопка скрыта, хотя информация для ссылки есть."""
+        main_window.url_input.setText(_URL)
+        main_window._current_video_title = "Test Video"
+        main_window._current_video_url = _URL
+        main_window._update_download_btn()
+        assert not main_window.download_btn.isHidden()
+
+        self._finish_download(main_window)
+        main_window._update_download_btn()
+
+        assert main_window._last_download_succeeded
+        assert main_window.download_btn.isHidden()
+        assert main_window._can_enable_download() is False
+
+    def test_url_change_resets_flag(self, main_window: MainWindow) -> None:
+        """Смена ссылки сбрасывает флаг и снова показывает кнопку."""
+        main_window.url_input.setText(_URL)
+        main_window._current_video_title = "Test Video"
+        main_window._current_video_url = _URL
+        self._finish_download(main_window)
+        assert main_window._last_download_succeeded
+
+        new_url = "https://youtube.com/watch?v=other"
+        main_window.url_input.setText(new_url)
+        assert main_window._last_download_succeeded is False
+
+        main_window._current_video_title = "Other Video"
+        main_window._current_video_url = new_url
+        main_window._update_download_btn()
+        assert not main_window.download_btn.isHidden()
+
+    def test_type_change_shows_button(self, main_window: MainWindow) -> None:
+        """Смена типа (MP4/MP3) сбрасывает флаг и показывает кнопку."""
+        main_window.url_input.setText(_URL)
+        main_window._current_video_title = "Test Video"
+        main_window._current_video_url = _URL
+        self._finish_download(main_window)
+        main_window._update_download_btn()
+        assert main_window.download_btn.isHidden()
+
+        main_window._on_type_changed(0)  # Видео (MP4)
+
+        assert main_window._last_download_succeeded is False
+        assert not main_window.download_btn.isHidden()
+
+    def test_quality_change_shows_button(self, main_window: MainWindow) -> None:
+        """Смена качества сбрасывает флаг и показывает кнопку."""
+        main_window.url_input.setText(_URL)
+        main_window._current_video_title = "Test Video"
+        main_window._current_video_url = _URL
+        self._finish_download(main_window)
+        main_window._update_download_btn()
+        assert main_window.download_btn.isHidden()
+
+        main_window._on_quality_changed()
+
+        assert main_window._last_download_succeeded is False
+        assert not main_window.download_btn.isHidden()
+
+    def test_error_does_not_set_success_flag(
+        self, main_window: MainWindow
+    ) -> None:
+        """Ошибка загрузки не прячет кнопку - можно повторить."""
+        main_window.url_input.setText(_URL)
+        main_window._current_video_title = "Test Video"
+        main_window._current_video_url = _URL
+        main_window._process_queue = MagicMock()
+        item = make_item()
+        main_window._queue_widget.add_item(item)
+        main_window._current_queue_item = item
+        worker = FakeWorker()
+        main_window._download_worker = worker
+        main_window._download_thread = None
+        worker.error_occurred.connect(main_window._on_download_error)
+        worker.error_occurred.emit("boom")
+
+        assert main_window._last_download_succeeded is False
+        main_window._update_download_btn()
+        assert not main_window.download_btn.isHidden()
