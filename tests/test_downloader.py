@@ -235,3 +235,32 @@ class TestDownload:
                 format_type="mp4",
                 quality="4k",
             )
+
+
+# ---------------------------------------------------------------------------
+# YouTubeDownloader._resolve_out_name
+# ---------------------------------------------------------------------------
+
+
+class TestResolveOutName:
+    """outtmpl не должен давать двойное расширение (баг «.mp3.mp3»)."""
+
+    def test_mp3_omits_extension(self, downloader: YouTubeDownloader) -> None:
+        """Для mp3 в шаблоне вывода расширение не указывается."""
+        assert downloader._resolve_out_name("My Song", "mp3") == "My Song"
+        assert downloader._resolve_out_name("My Song.mp3", "mp3") == "My Song"
+
+    def test_mp4_keeps_extension(self, downloader: YouTubeDownloader) -> None:
+        """Для mp4 имя в шаблоне фиксируется с расширением .mp4."""
+        assert downloader._resolve_out_name("My Video", "mp4") == "My Video.mp4"
+        assert downloader._resolve_out_name("My Video.mp4", "mp4") == "My Video.mp4"
+
+    def test_mp4_replaces_foreign_extension(
+        self, downloader: YouTubeDownloader
+    ) -> None:
+        """Чужое расширение заменяется на .mp4 (совпадает с merge_format)."""
+        assert downloader._resolve_out_name("My Video.mkv", "mp4") == "My Video.mp4"
+
+    def test_sanitizes_invalid_chars(self, downloader: YouTubeDownloader) -> None:
+        """Недопустимые символы очищаются до построения шаблона."""
+        assert downloader._resolve_out_name('A:B"C?', "mp3") == "A_B_C_"
