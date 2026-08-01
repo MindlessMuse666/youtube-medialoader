@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "youtube-medialoader"
-version = "v2.1-unstable"
+version = "v2.2-stable"
 description = "Десктопное приложение для скачивания видео и аудио с YouTube"
 readme = "README.md"
 license = {text = "AGPL-3.0"}

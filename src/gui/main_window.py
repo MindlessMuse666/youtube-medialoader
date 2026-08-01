@@ -448,7 +448,7 @@ class MainWindow(QMainWindow):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         parent.addWidget(title)
 
-        subtitle = QLabel("v2.1-unstable | mp4 / mp3 / плейлисты")
+        subtitle = QLabel("v2.2-stable | mp4 / mp3 / плейлисты")
         subtitle.setObjectName("subtitleLabel")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         parent.addWidget(subtitle)
