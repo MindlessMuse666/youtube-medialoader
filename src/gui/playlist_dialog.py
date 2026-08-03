@@ -205,8 +205,8 @@ class PlaylistDialog(QDialog):
         scroll.setWidget(list_widget)
         layout.addWidget(scroll, 1)
 
-        # Кнопка "Скачать выбранные"
-        download_btn = QPushButton(f"📥 Скачать выбранные ({len(self._entries)})")
+        # Кнопка "СКАЧАТЬ ВЫБРАННЫЕ"
+        download_btn = QPushButton(f"СКАЧАТЬ ВЫБРАННЫЕ ({len(self._entries)})")
         download_btn.setObjectName("playlistDownloadBtn")
         download_btn.clicked.connect(self._accept_selected)
         layout.addWidget(download_btn)
@@ -235,7 +235,7 @@ class PlaylistDialog(QDialog):
         # Обновляем текст кнопки
         for child in self.findChildren(QPushButton):
             if child.text().startswith("📥"):
-                child.setText(f"📥 Скачать выбранные ({count})")
+                child.setText(f"СКАЧАТЬ ВЫБРАННЫЕ ({count})")
                 break
 
     def _accept_selected(self) -> None:
